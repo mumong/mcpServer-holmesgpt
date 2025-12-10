@@ -1,6 +1,21 @@
 # MCP Server Manager
 
 将 MCP 工具转换为 SSE 端点，供 HolmesGPT 等服务集成使用。
+一句话说明如何扩展使用新的mcp工具并且配置运行
+1. 写自己的mcp service 并且把它放在/servers下 或者使用第三方的mcp工具如npm的或者uv的或者golang的
+2. 将写好的文件写入到配置configmap.yaml里，里面定义好需要暴露的端口，
+3. 同步修改svc和deployment中关于port的暴露端口
+4. 编译镜像保存运行。
+5. 修改aiops的项目中的config.yaml文件,将新添加的服务填入aiops的配置configmap中。
+```
+      elasticsearch:
+        description: "Elasticsearch MCP 工具集 - 用于查询索引、搜索日志数据"
+        config:
+          url: "http://mcp-server-manager.mcp:8088/sse"
+          mode: "sse"
+        enabled: true
+```
+6. 重新加载aiops的configmap。让agent服务重新运行加载新的工具集合。
 
 ## 目录结构
 
