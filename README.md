@@ -1,223 +1,154 @@
-# MCP Server 统一管理工具
+# MCP Server Manager
 
-将 MCP 工具转换为 SSE 端点，供其他服务（如 HolmesGPT）集成使用。
+将 MCP 工具转换为 SSE 端点，供 HolmesGPT 等服务集成使用。
 
 ## 目录结构
 
 ```
 mcpstander/
-├── start.py             # 统一启动器
-├── mcp_config.yaml      # 配置文件
+├── start.py             # 启动器
+├── mcp_config.yaml      # 本地配置文件 (开发用)
 ├── mcp_client.py        # 测试客户端
 ├── servers/             # 本地自定义 MCP 工具
-│   └── test_server.py   # 示例工具
-└── requirements.txt
-```
-
-## 工作原理
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     mcp_config.yaml                         │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │              customermcp (第三方包)                 │    │
-│  │   ┌─────────────┐        ┌─────────────┐           │    │
-│  │   │  npm 包     │        │   uv 包     │           │    │
-│  │   │ npx -y xxx  │        │ uv run xxx  │           │    │
-│  │   └──────┬──────┘        └──────┬──────┘           │    │
-│  └──────────┼──────────────────────┼──────────────────┘    │
-│  ┌──────────┼──────────────────────┼──────────────────┐    │
-│  │          │   basicmcp (本地工具) │                 │    │
-│  │          │     ┌─────────────┐   │                 │    │
-│  │          │     │ python xxx  │   │                 │    │
-│  │          │     └──────┬──────┘   │                 │    │
-│  └──────────┼────────────┼──────────┼─────────────────┘    │
-└─────────────┼────────────┼──────────┼──────────────────────┘
-              │            │          │
-              ▼            ▼          ▼
-        ┌─────────────────────────────────────┐
-        │           Supergateway              │
-        │         (stdio → SSE 转换)          │
-        └────────────────┬────────────────────┘
-                         ▼
-        ┌─────────────────────────────────────┐
-        │           SSE 端点                  │
-        │   http://localhost:<port>/sse       │
-        └────────────────┬────────────────────┘
-                         ▼
-        ┌─────────────────────────────────────┐
-        │      HolmesGPT / 其他服务           │
-        │      (只需配置 SSE URL 即可)        │
-        └─────────────────────────────────────┘
+│   └── test_server.py
+├── deploy/              # K8s 部署文件
+│   ├── namespace.yaml
+│   ├── configmap.yaml   # 配置文件 (生产用)
+│   ├── deployment.yaml
+│   └── service.yaml
+├── Dockerfile
+├── Makefile
+└── VERSION
 ```
 
 ## 快速开始
 
+### 本地运行
+
 ```bash
-# 1. 安装依赖
 pip install -r requirements.txt
-
-# 2. 编辑配置文件
-vim mcp_config.yaml
-
-# 3. 启动所有服务
 python start.py
-
-# 4. 测试连接
-python mcp_client.py http://localhost:8082/sse
 ```
 
-## 扩展新的 MCP 工具
-
-### 方式一：第三方 npm 包
-
-```yaml
-customermcp:
-  - name: github
-    type: npm                                      # npm 类型
-    package: "@modelcontextprotocol/server-github" # npm 包名
-    port: 8083
-    enabled: true
-    env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxx"
-```
-
-**常用 npm 包**:
-
-| 包名 | 描述 |
-|------|------|
-| `@elastic/mcp-server-elasticsearch` | Elasticsearch |
-| `@modelcontextprotocol/server-github` | GitHub |
-| `@modelcontextprotocol/server-postgres` | PostgreSQL |
-| `@modelcontextprotocol/server-slack` | Slack |
-
-### 方式二：第三方 uv 包 (Python)
-
-需要先下载/克隆项目到本地，然后配置 `directory` 指向项目路径。
+### K8s 部署
 
 ```bash
-# 1. 下载项目
-git clone https://github.com/designcomputer/mysql_mcp_server.git /opt/mcp/mysql_mcp_server
+# 构建并推送镜像
+make build-push
+
+# 部署
+make deploy
+
+# 查看状态
+make status
 ```
+
+## 配置说明
+
+编辑 `deploy/configmap.yaml` 配置 MCP 工具：
 
 ```yaml
-# 2. 配置
-customermcp:
-  - name: mysql
-    type: uv                                   # uv 类型
-    package: "mysql_mcp_server"                # 包名/命令
-    directory: "/opt/mcp/mysql_mcp_server"     # 必填: 项目目录
-    port: 8084
-    enabled: true
-    env:
-      MYSQL_HOST: "localhost"
-      MYSQL_PORT: "3306"
-      MYSQL_USER: "root"
-      MYSQL_PASSWORD: "password"
-      MYSQL_DATABASE: "mydb"
+data:
+  mcp_config.yaml: |
+    # 第三方 npm 包
+    customermcp:
+      - name: elasticsearch
+        type: npm
+        package: "@elastic/mcp-server-elasticsearch@0.3.1"
+        port: 8088
+        enabled: true
+        env:
+          ES_URL: "https://elasticsearch:9200"
+          ES_USERNAME: "elastic"
+          ES_PASSWORD: "changeme"
+
+    # 本地自定义工具
+    basicmcp:
+      - name: test-tools
+        path: "servers/test_server.py"
+        port: 8091
+        enabled: true
 ```
 
-**uv 包来源**: [ModelScope MCP Servers](https://modelscope.cn/mcp/servers)
+## HolmesGPT 集成
 
-### 方式三：本地自定义工具
+### SSE 端点 URL 格式
 
-1. **在 `servers/` 目录下创建 Python 文件**
-
-```python
-# servers/my_tools.py
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
-import asyncio
-
-server = Server("my-tools")
-
-@server.list_tools()
-async def list_tools():
-    return [
-        Tool(
-            name="my_tool",
-            description="我的自定义工具",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "param1": {"type": "string", "description": "参数1"}
-                },
-                "required": ["param1"]
-            }
-        )
-    ]
-
-@server.call_tool()
-async def call_tool(name: str, arguments: dict):
-    if name == "my_tool":
-        result = f"处理结果: {arguments.get('param1')}"
-        return [TextContent(type="text", text=result)]
-    return [TextContent(type="text", text=f"未知工具: {name}")]
-
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
-
-if __name__ == "__main__":
-    asyncio.run(main())
+```
+http://mcp-server-manager.<namespace>:<port>/sse
 ```
 
-2. **在 `mcp_config.yaml` 添加配置**
+### 配置示例
+
+在 HolmesGPT 或其他服务的配置中添加：
 
 ```yaml
-basicmcp:
-  - name: my-tools
-    path: "servers/my_tools.py"
-    port: 8091
-    enabled: true
-```
-
-## 配置文件格式
-
-```yaml
-# 第三方包 (npm / uv)
-customermcp:
-  - name: <服务名>
-    type: npm | uv           # npm 或 uv (Python)
-    package: "<包名>"        # npm 包名 或 命令名
-    directory: "<目录>"      # uv 必填: 项目目录
-    port: <端口>
-    enabled: true | false
-    env:
-      KEY: "value"
-
-# 本地自定义工具
-basicmcp:
-  - name: <服务名>
-    path: "servers/<文件名>.py"
-    port: <端口>
-    enabled: true | false
-```
-
-## 命令参考
-
-```bash
-python start.py                    # 启动所有服务
-python start.py --list             # 列出配置
-python start.py --config xxx.yaml  # 指定配置文件
-
-python mcp_client.py <sse_url>     # 测试连接
-python mcp_client.py <url> --call <tool>  # 调用工具
-```
-
-## 其他服务集成
-
-启动后，其他服务只需配置 SSE URL：
-
-```yaml
-# HolmesGPT 配置示例
 mcp_servers:
   elasticsearch:
+    description: "Elasticsearch MCP - 查询索引、搜索日志"
     config:
-      url: "http://localhost:8082/sse"
+      url: "http://mcp-server-manager.mcp:8088/sse"
       mode: "sse"
+    enabled: true
+  
+  test-tools:
+    description: "测试工具集 - MCP 集成测试"
+    config:
+      url: "http://mcp-server-manager.mcp:8091/sse"
+      mode: "sse"
+    llm_instructions: "只有当用户需要测试的时候才运行"
     enabled: true
 ```
 
-详见 [HOLMESGPT_CONFIG.md](HOLMESGPT_CONFIG.md)
+### 端口对应关系
+
+| MCP 服务 | ConfigMap 中的 port | SSE URL |
+|----------|---------------------|---------|
+| elasticsearch | 8088 | `http://mcp-server-manager.mcp:8088/sse` |
+| test-tools | 8091 | `http://mcp-server-manager.mcp:8091/sse` |
+
+> **注意**: `.mcp` 是 namespace 名称，如果部署在其他 namespace，请相应修改。
+
+## Makefile 命令
+
+| 命令 | 说明 |
+|------|------|
+| `make build` | 构建镜像 |
+| `make push` | 推送镜像 |
+| `make build-push` | 构建并推送 |
+| `make deploy` | 部署到 K8s |
+| `make undeploy` | 卸载部署 |
+| `make delete` | 删除所有资源（包括 namespace） |
+| `make reload` | 更新配置并重启 |
+| `make status` | 查看状态 |
+| `make logs` | 查看日志 |
+| `make restart` | 重启服务 |
+
+## 扩展新工具
+
+### 添加第三方 npm 包
+
+在 `deploy/configmap.yaml` 的 `customermcp` 部分添加：
+
+```yaml
+- name: github
+  type: npm
+  package: "@modelcontextprotocol/server-github"
+  port: 8089
+  enabled: true
+  env:
+    GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxx"
+```
+
+### 添加本地自定义工具
+
+1. 在 `servers/` 下创建 Python 文件
+2. 在 `deploy/configmap.yaml` 的 `basicmcp` 部分添加配置
+3. 重新构建镜像：`make build-push`
+4. 重启服务：`make restart`
+
+## 注意事项
+
+1. **端口同步**: 修改 ConfigMap 中的端口后，需要同步修改 `deployment.yaml` 和 `service.yaml`
+2. **镜像更新**: 修改 `start.py` 或 `servers/` 下的代码后，需要重新构建镜像
+3. **配置更新**: 只修改 ConfigMap 时，执行 `make reload` 即可

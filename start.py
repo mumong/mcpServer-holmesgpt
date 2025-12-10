@@ -153,11 +153,19 @@ class MCPServerManager:
         # 检查文件是否存在
         script_path = Path(path)
         if not script_path.is_absolute():
-            script_path = self.config_path.parent / path
-        
-        if not script_path.exists():
-            print(f"  ❌ {name}: 脚本不存在 - {script_path}")
-            return None
+            # 优先从工作目录查找，其次从配置文件目录查找
+            work_dir_path = Path(__file__).parent / path
+            config_dir_path = self.config_path.parent / path
+            
+            if work_dir_path.exists():
+                script_path = work_dir_path
+            elif config_dir_path.exists():
+                script_path = config_dir_path
+            else:
+                print(f"  ❌ {name}: 脚本不存在 - {path}")
+                print(f"     尝试路径: {work_dir_path}")
+                print(f"     尝试路径: {config_dir_path}")
+                return None
         
         # 准备环境变量
         env = os.environ.copy()

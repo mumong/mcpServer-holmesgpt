@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server-manager
+  namespace: mcp
+  labels:
+    app: mcp-server-manager
+spec:
+  type: ClusterIP
+  selector:
+    app: mcp-server-manager
+  ports:
+    # 端口需要与 ConfigMap 中的 port 配置一致
+    - name: es-mcp
+      port: 8088
+      targetPort: 8088
+    - name: test-mcp
+      port: 8091
+      targetPort: 8091
