@@ -1,0 +1,54 @@
+# MCP Server 配置文件
+# 运行: python start.py
+
+# ============================================================
+# 第三方 MCP 包 (支持 npm 和 uv 两种类型)
+# ============================================================
+customermcp:
+  # --- npm 包示例 ---
+  - name: elasticsearch
+    type: npm                                       # npm 包 (默认)
+    package: "@elastic/mcp-server-elasticsearch@0.3.1"
+    port: 8082
+    enabled: true
+    env:
+      ES_URL: "https://10.2.0.48:32317"
+      ES_USERNAME: "elastic"
+      ES_PASSWORD: "DKMt3H2aibAqLsky"
+      ES_SSL_SKIP_VERIFY: "true"
+  
+  # - name: github
+  #   type: npm
+  #   package: "@modelcontextprotocol/server-github"
+  #   port: 8083
+  #   enabled: false
+  #   env:
+  #     GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxx"
+  
+  # --- uv 包示例 (Python) ---
+  # - name: mysql
+  #   type: uv                                      # Python uv 包
+  #   package: "mysql_mcp_server"                   # 包名/命令名
+  #   directory: "/path/to/mysql_mcp_server"        # 必填: 项目目录
+  #   port: 8084
+  #   enabled: true
+  #   env:
+  #     MYSQL_HOST: "localhost"
+  #     MYSQL_PORT: "3306"
+  #     MYSQL_USER: "root"
+  #     MYSQL_PASSWORD: "password"
+  #     MYSQL_DATABASE: "mydb"
+
+# ============================================================
+# 本地自定义 MCP Server (放在 servers/ 目录下)
+# ============================================================
+basicmcp:
+  - name: test-tools
+    path: "servers/test_server.py"
+    port: 8090
+    enabled: true
+  
+  # - name: custom-tools
+  #   path: "servers/custom_server.py"
+  #   port: 8091
+  #   enabled: true

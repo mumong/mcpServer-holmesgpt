@@ -1,93 +1,223 @@
-# mcpStander
+# MCP Server 统一管理工具
 
+将 MCP 工具转换为 SSE 端点，供其他服务（如 HolmesGPT）集成使用。
 
-
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+## 目录结构
 
 ```
-cd existing_repo
-git remote add origin http://192.168.1.63/wanghuhu/mcpstander.git
-git branch -M main
-git push -uf origin main
+mcpstander/
+├── start.py             # 统一启动器
+├── mcp_config.yaml      # 配置文件
+├── mcp_client.py        # 测试客户端
+├── servers/             # 本地自定义 MCP 工具
+│   └── test_server.py   # 示例工具
+└── requirements.txt
 ```
 
-## Integrate with your tools
+## 工作原理
 
-- [ ] [Set up project integrations](http://192.168.1.63/wanghuhu/mcpstander/-/settings/integrations)
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     mcp_config.yaml                         │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              customermcp (第三方包)                 │    │
+│  │   ┌─────────────┐        ┌─────────────┐           │    │
+│  │   │  npm 包     │        │   uv 包     │           │    │
+│  │   │ npx -y xxx  │        │ uv run xxx  │           │    │
+│  │   └──────┬──────┘        └──────┬──────┘           │    │
+│  └──────────┼──────────────────────┼──────────────────┘    │
+│  ┌──────────┼──────────────────────┼──────────────────┐    │
+│  │          │   basicmcp (本地工具) │                 │    │
+│  │          │     ┌─────────────┐   │                 │    │
+│  │          │     │ python xxx  │   │                 │    │
+│  │          │     └──────┬──────┘   │                 │    │
+│  └──────────┼────────────┼──────────┼─────────────────┘    │
+└─────────────┼────────────┼──────────┼──────────────────────┘
+              │            │          │
+              ▼            ▼          ▼
+        ┌─────────────────────────────────────┐
+        │           Supergateway              │
+        │         (stdio → SSE 转换)          │
+        └────────────────┬────────────────────┘
+                         ▼
+        ┌─────────────────────────────────────┐
+        │           SSE 端点                  │
+        │   http://localhost:<port>/sse       │
+        └────────────────┬────────────────────┘
+                         ▼
+        ┌─────────────────────────────────────┐
+        │      HolmesGPT / 其他服务           │
+        │      (只需配置 SSE URL 即可)        │
+        └─────────────────────────────────────┘
+```
 
-## Collaborate with your team
+## 快速开始
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
 
-## Test and Deploy
+# 2. 编辑配置文件
+vim mcp_config.yaml
 
-Use the built-in continuous integration in GitLab.
+# 3. 启动所有服务
+python start.py
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+# 4. 测试连接
+python mcp_client.py http://localhost:8082/sse
+```
 
-***
+## 扩展新的 MCP 工具
 
-# Editing this README
+### 方式一：第三方 npm 包
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```yaml
+customermcp:
+  - name: github
+    type: npm                                      # npm 类型
+    package: "@modelcontextprotocol/server-github" # npm 包名
+    port: 8083
+    enabled: true
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxx"
+```
 
-## Suggestions for a good README
+**常用 npm 包**:
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+| 包名 | 描述 |
+|------|------|
+| `@elastic/mcp-server-elasticsearch` | Elasticsearch |
+| `@modelcontextprotocol/server-github` | GitHub |
+| `@modelcontextprotocol/server-postgres` | PostgreSQL |
+| `@modelcontextprotocol/server-slack` | Slack |
 
-## Name
-Choose a self-explaining name for your project.
+### 方式二：第三方 uv 包 (Python)
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+需要先下载/克隆项目到本地，然后配置 `directory` 指向项目路径。
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```bash
+# 1. 下载项目
+git clone https://github.com/designcomputer/mysql_mcp_server.git /opt/mcp/mysql_mcp_server
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+```yaml
+# 2. 配置
+customermcp:
+  - name: mysql
+    type: uv                                   # uv 类型
+    package: "mysql_mcp_server"                # 包名/命令
+    directory: "/opt/mcp/mysql_mcp_server"     # 必填: 项目目录
+    port: 8084
+    enabled: true
+    env:
+      MYSQL_HOST: "localhost"
+      MYSQL_PORT: "3306"
+      MYSQL_USER: "root"
+      MYSQL_PASSWORD: "password"
+      MYSQL_DATABASE: "mydb"
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+**uv 包来源**: [ModelScope MCP Servers](https://modelscope.cn/mcp/servers)
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+### 方式三：本地自定义工具
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+1. **在 `servers/` 目录下创建 Python 文件**
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+```python
+# servers/my_tools.py
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+import asyncio
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+server = Server("my-tools")
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+@server.list_tools()
+async def list_tools():
+    return [
+        Tool(
+            name="my_tool",
+            description="我的自定义工具",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "param1": {"type": "string", "description": "参数1"}
+                },
+                "required": ["param1"]
+            }
+        )
+    ]
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+@server.call_tool()
+async def call_tool(name: str, arguments: dict):
+    if name == "my_tool":
+        result = f"处理结果: {arguments.get('param1')}"
+        return [TextContent(type="text", text=result)]
+    return [TextContent(type="text", text=f"未知工具: {name}")]
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+async def main():
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
-## License
-For open source projects, say how it is licensed.
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+2. **在 `mcp_config.yaml` 添加配置**
+
+```yaml
+basicmcp:
+  - name: my-tools
+    path: "servers/my_tools.py"
+    port: 8091
+    enabled: true
+```
+
+## 配置文件格式
+
+```yaml
+# 第三方包 (npm / uv)
+customermcp:
+  - name: <服务名>
+    type: npm | uv           # npm 或 uv (Python)
+    package: "<包名>"        # npm 包名 或 命令名
+    directory: "<目录>"      # uv 必填: 项目目录
+    port: <端口>
+    enabled: true | false
+    env:
+      KEY: "value"
+
+# 本地自定义工具
+basicmcp:
+  - name: <服务名>
+    path: "servers/<文件名>.py"
+    port: <端口>
+    enabled: true | false
+```
+
+## 命令参考
+
+```bash
+python start.py                    # 启动所有服务
+python start.py --list             # 列出配置
+python start.py --config xxx.yaml  # 指定配置文件
+
+python mcp_client.py <sse_url>     # 测试连接
+python mcp_client.py <url> --call <tool>  # 调用工具
+```
+
+## 其他服务集成
+
+启动后，其他服务只需配置 SSE URL：
+
+```yaml
+# HolmesGPT 配置示例
+mcp_servers:
+  elasticsearch:
+    config:
+      url: "http://localhost:8082/sse"
+      mode: "sse"
+    enabled: true
+```
+
+详见 [HOLMESGPT_CONFIG.md](HOLMESGPT_CONFIG.md)
