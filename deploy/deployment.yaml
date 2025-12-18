@@ -15,9 +15,10 @@ spec:
       labels:
         app: mcp-server-manager
     spec:
+      serviceAccountName: mcp-server-manager
       containers:
         - name: mcp-server-manager
-          image: xnet.registry.io:8443/xnet-cloud/mcp-server-manager:1.0.0
+          image: xnet.registry.io:8443/xnet-cloud/mcp-server-manager:1.8.1
           imagePullPolicy: Always
           ports:
             # 端口需要与 ConfigMap 中的 port 配置一致
@@ -25,6 +26,8 @@ spec:
               containerPort: 8088
             - name: test-mcp
               containerPort: 8091
+            - name: helm-mcp
+              containerPort: 8092
           volumeMounts:
             - name: config
               mountPath: /app/config

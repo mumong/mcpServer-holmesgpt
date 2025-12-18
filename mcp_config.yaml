@@ -48,6 +48,11 @@ basicmcp:
     port: 8090
     enabled: true
   
+  - name: helm-tools
+    path: "servers/helm_server.py"
+    port: 8092
+    enabled: true
+  
   # - name: custom-tools
   #   path: "servers/custom_server.py"
   #   port: 8091

@@ -17,3 +17,6 @@ spec:
     - name: test-mcp
       port: 8091
       targetPort: 8091
+    - name: helm-mcp
+      port: 8092
+      targetPort: 8092

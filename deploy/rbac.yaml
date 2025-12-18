@@ -1,0 +1,31 @@
+# ============================================================================
+# MCP Server Manager RBAC 配置
+# ============================================================================
+# 授予集群管理员权限，用于 Helm 安装/卸载/升级各种应用
+# ============================================================================
+
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-server-manager
+  namespace: mcp
+  labels:
+    app: mcp-server-manager
+
+---
+# ClusterRoleBinding - 绑定到 cluster-admin（最高权限）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-server-manager-cluster-admin
+  labels:
+    app: mcp-server-manager
+subjects:
+  - kind: ServiceAccount
+    name: mcp-server-manager
+    namespace: mcp
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin          # Kubernetes 内置的超级管理员角色
+  apiGroup: rbac.authorization.k8s.io

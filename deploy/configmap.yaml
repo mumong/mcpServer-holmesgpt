@@ -43,3 +43,8 @@ data:
         path: "servers/test_server.py"
         port: 8091
         enabled: true
+      
+      - name: helm-tools
+        path: "servers/helm_server.py"
+        port: 8092
+        enabled: true

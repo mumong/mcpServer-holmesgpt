@@ -9,58 +9,114 @@ NAMESPACE := mcp
 VERSION ?= $(shell cat VERSION)
 DOCKER_TAG := $(VERSION)
 
+.PHONY: build push build-push deploy delete restart reload logs status sync-version
+
 # ============================================================
 # Docker
 # ============================================================
 
-.PHONY: build
 build:
 	@echo "🔨 Building $(DOCKER_NAME):$(DOCKER_TAG)..."
 	docker build --build-arg VERSION=$(VERSION) -t $(DOCKER_NAME):$(DOCKER_TAG) .
 
-.PHONY: push
 push:
 	@echo "📤 Pushing $(DOCKER_NAME):$(DOCKER_TAG)..."
 	docker push $(DOCKER_NAME):$(DOCKER_TAG)
 
-.PHONY: build-push
 build-push: build push
 
 # ============================================================
 # Kubernetes
 # ============================================================
 
-.PHONY: deploy
 deploy:
-	@echo "🚀 Deploying to namespace: $(NAMESPACE)..."
-	kubectl apply -f deploy/namespace.yaml
+	@echo "🚀 Deploying $(DOCKER_NAME):$(DOCKER_TAG)..."
+	# 1. 同步版本到 deployment.yaml
+	@sed -i 's|image: $(IMAGE_REPOSITORY)/$(PROJECT)/$(IMAGE_NAME):.*|image: $(DOCKER_NAME):$(DOCKER_TAG)|' deploy/deployment.yaml
+	# 2. 创建 namespace（如果不存在）
+	@kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	# 3. 应用所有配置（会自动触发滚动更新）
 	kubectl apply -f deploy/
+	# 4. 等待滚动更新完成
+	@echo "⏳ Waiting for rollout to complete..."
+	kubectl rollout status deployment/mcp-server-manager -n $(NAMESPACE) --timeout=120s
+	@echo "✅ Deploy completed!"
 
-.PHONY: undeploy
-undeploy:
-	kubectl delete -f deploy/ --ignore-not-found
-
-.PHONY: delete
 delete:
-	@echo "🗑️  Deleting all MCP resources..."
-	kubectl delete deployment mcp-server-manager -n $(NAMESPACE) --ignore-not-found
-	kubectl delete service mcp-server-manager -n $(NAMESPACE) --ignore-not-found
-	kubectl delete configmap mcp-config -n $(NAMESPACE) --ignore-not-found
+	@echo "🗑️  Deleting MCP resources (keeping namespace)..."
+	kubectl delete -f deploy/deployment.yaml --ignore-not-found
+	kubectl delete -f deploy/service.yaml --ignore-not-found
+	kubectl delete -f deploy/configmap.yaml --ignore-not-found
 	@echo "✅ All MCP resources deleted"
 
-.PHONY: reload
+restart:
+	@echo "🔄 Restarting pods..."
+	kubectl rollout restart deployment/mcp-server-manager -n $(NAMESPACE)
+	kubectl rollout status deployment/mcp-server-manager -n $(NAMESPACE) --timeout=120s
+	@echo "✅ Restart completed!"
+
 reload:
+	@echo "🔃 Reloading config and restarting..."
 	kubectl apply -f deploy/configmap.yaml
 	kubectl rollout restart deployment/mcp-server-manager -n $(NAMESPACE)
+	kubectl rollout status deployment/mcp-server-manager -n $(NAMESPACE) --timeout=120s
+	@echo "✅ Reload completed!"
 
-.PHONY: status
-status:
-	kubectl get pods,svc,configmap -n $(NAMESPACE) -l app=mcp-server-manager
-
-.PHONY: logs
 logs:
-	kubectl logs -n $(NAMESPACE) -l app=mcp-server-manager -f
+	kubectl logs -f deployment/mcp-server-manager -n $(NAMESPACE)
 
-.PHONY: restart
-restart:
-	kubectl rollout restart deployment/mcp-server-manager -n $(NAMESPACE)
+status:
+	@echo "📊 MCP Server Manager Status:"
+	@echo "----------------------------------------"
+	kubectl get pods,svc,configmap -n $(NAMESPACE) -l app=mcp-server-manager
+	@echo "----------------------------------------"
+
+# 同步 VERSION 到 deployment.yaml
+sync-version:
+	@echo "🔄 Syncing version to $(DOCKER_TAG)..."
+	sed -i 's|image: $(IMAGE_REPOSITORY)/$(PROJECT)/$(IMAGE_NAME):.*|image: $(DOCKER_NAME):$(DOCKER_TAG)|' deploy/deployment.yaml
+	@echo "✅ Version synced!"
+
+# ============================================================
+# 开发辅助
+# ============================================================
+
+# 本地运行
+run:
+	@echo "🏃 Running locally..."
+	python start.py
+
+# 列出配置的服务
+list:
+	@python start.py --list
+
+# 测试客户端连接
+test:
+	@echo "🧪 Testing MCP client..."
+	python mcp_client.py
+
+# 显示帮助
+help:
+	@echo "MCP Server Manager - 可用命令:"
+	@echo ""
+	@echo "  Docker:"
+	@echo "    make build        - 构建镜像"
+	@echo "    make push         - 推送镜像"
+	@echo "    make build-push   - 构建并推送"
+	@echo ""
+	@echo "  Kubernetes:"
+	@echo "    make deploy       - 部署到 K8s（自动同步版本）"
+	@echo "    make delete       - 删除资源（保留 namespace）"
+	@echo "    make restart      - 重启 pods"
+	@echo "    make reload       - 更新配置并重启"
+	@echo "    make status       - 查看状态"
+	@echo "    make logs         - 查看日志"
+	@echo "    make sync-version - 同步版本到 yaml"
+	@echo ""
+	@echo "  开发:"
+	@echo "    make run          - 本地运行"
+	@echo "    make list         - 列出配置的服务"
+	@echo "    make test         - 测试客户端"
+	@echo ""
+	@echo "  当前版本: $(DOCKER_TAG)"
+	@echo "  镜像地址: $(DOCKER_NAME):$(DOCKER_TAG)"

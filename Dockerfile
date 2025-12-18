@@ -12,12 +12,22 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VERSION=${VERSION}
 
-# 安装 Node.js (使用 apt 源，不需要外网)
+# 安装 Node.js 和必要工具
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
+    curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# 安装 Helm 并预配置常用仓库
+RUN curl -fsSL https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz | tar -xzf - \
+    && mv linux-amd64/helm /usr/local/bin/helm \
+    && rm -rf linux-amd64 \
+    && helm version --short \
+    && helm repo add bitnami https://charts.bitnami.com/bitnami \
+    && helm repo add stable https://charts.helm.sh/stable \
+    && helm repo update
 
 WORKDIR /app
 
