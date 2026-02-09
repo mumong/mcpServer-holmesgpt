@@ -18,6 +18,7 @@ import subprocess
 import argparse
 import signal
 import time
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
@@ -36,6 +37,17 @@ class MCPServerManager:
         self.processes: List[Tuple[str, subprocess.Popen]] = []  # (name, process)
         self.config: Dict[str, Any] = {}
         self._stop_flag = False
+    
+    def _stream_output(self, name: str, process: subprocess.Popen):
+        """读取并打印子进程的输出"""
+        try:
+            for line in iter(process.stdout.readline, ''):
+                if line:
+                    print(f"[{name}] {line.rstrip()}", flush=True)
+                if process.poll() is not None:
+                    break
+        except:
+            pass
         
     def load_config(self) -> bool:
         """加载配置文件"""
@@ -117,8 +129,8 @@ class MCPServerManager:
             inner_cmd = f"npx -y {package}"
             type_icon = "📦"
         
-        # 构建 supergateway 命令
-        cmd = f'npx -y supergateway --stdio "{inner_cmd}" --port {port}'
+        # 使用 mcp-proxy (支持更好的连接管理和重连)
+        cmd = f'npx -y mcp-proxy --port {port} --server sse -- {inner_cmd}'
         
         print(f"  🚀 {name}: 启动中... [{pkg_type}]")
         print(f"     {type_icon} 包: {package}")
@@ -132,9 +144,13 @@ class MCPServerManager:
                 cmd,
                 shell=True,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
+            # 启动输出读取线程
+            threading.Thread(target=self._stream_output, args=(name, process), daemon=True).start()
             return (name, process)
         except Exception as e:
             print(f"  ❌ {name}: 启动失败 - {e}")
@@ -171,8 +187,9 @@ class MCPServerManager:
         env = os.environ.copy()
         env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
         
-        # 构建命令 (使用 shell=True 来正确处理 --stdio 参数)
-        cmd = f'npx -y supergateway --stdio "python {script_path}" --port {port}'
+        # 构建命令 (使用当前 Python 解释器 sys.executable，兼容仅有 python3 的环境)
+        # 使用 mcp-proxy (支持更好的连接管理和重连)
+        cmd = f'npx -y mcp-proxy --port {port} --server sse -- {sys.executable} {script_path}'
         
         print(f"  🚀 {name}: 启动中...")
         print(f"     路径: {script_path}")
@@ -184,9 +201,13 @@ class MCPServerManager:
                 cmd,
                 shell=True,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
+            # 启动输出读取线程
+            threading.Thread(target=self._stream_output, args=(name, process), daemon=True).start()
             return (name, process)
         except Exception as e:
             print(f"  ❌ {name}: 启动失败 - {e}")

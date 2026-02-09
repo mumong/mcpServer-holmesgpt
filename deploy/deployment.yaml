@@ -18,7 +18,7 @@ spec:
       serviceAccountName: mcp-server-manager
       containers:
         - name: mcp-server-manager
-          image: xnet.registry.io:8443/xnet-cloud/mcp-server-manager:1.8.1
+          image: xnet.registry.io:8443/xnet-cloud/mcp-server-manager:4.0.3
           imagePullPolicy: Always
           ports:
             # 端口需要与 ConfigMap 中的 port 配置一致
