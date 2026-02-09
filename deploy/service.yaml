@@ -20,3 +20,6 @@ spec:
     - name: helm-mcp
       port: 8092
       targetPort: 8092
+    - name: k8s-mcp
+      port: 8093
+      targetPort: 8093

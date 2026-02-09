@@ -17,6 +17,12 @@ customermcp:
       ES_PASSWORD: "DKMt3H2aibAqLsky"
       ES_SSL_SKIP_VERIFY: "true"
   
+  - name: kubernetes
+    type: npm
+    package: "mcp-server-kubernetes"
+    port: 8093
+    enabled: true
+  
   # - name: github
   #   type: npm
   #   package: "@modelcontextprotocol/server-github"
