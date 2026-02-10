@@ -15,7 +15,7 @@ data:
         type: npm
         package: "@elastic/mcp-server-elasticsearch@0.3.1"
         port: 8088
-        enabled: true
+        enabled: false  # 暂时禁用，待修复连接配置
         env:
           ES_URL: "https://elasticsearch:9200"
           ES_USERNAME: "elastic"
