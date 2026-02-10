@@ -20,6 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# 预装 mcp-proxy，避免运行时多进程并发 npx 安装导致缓存冲突/损坏
+RUN npm install -g mcp-proxy
+
 # 安装 Helm 并预配置常用仓库
 RUN curl -fsSL https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz | tar -xzf - \
     && mv linux-amd64/helm /usr/local/bin/helm \

@@ -19,6 +19,7 @@ import argparse
 import signal
 import time
 import threading
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
@@ -109,11 +110,16 @@ class MCPServerManager:
             print(f"  ❌ {name}: 缺少 package 或 port 配置")
             return None
         
-        # 准备环境变量
+        # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
         env = os.environ.copy()
         env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        env["npm_config_cache"] = f"/tmp/npm-cache-{port}"
+        env["NPX_HOME"] = f"/tmp/npx-{port}"
         for key, value in env_vars.items():
             env[key] = str(value)
+        
+        # 优先使用镜像内预装的 mcp-proxy，避免 npx 并发安装
+        mcp_proxy_cmd = "mcp-proxy" if shutil.which("mcp-proxy") else "npx -y mcp-proxy"
         
         # 根据类型构建内部命令
         if pkg_type == 'uv':
@@ -130,7 +136,7 @@ class MCPServerManager:
             type_icon = "📦"
         
         # 使用 mcp-proxy (支持更好的连接管理和重连)
-        cmd = f'npx -y mcp-proxy --port {port} --server sse -- {inner_cmd}'
+        cmd = f'{mcp_proxy_cmd} --port {port} --server sse -- {inner_cmd}'
         
         print(f"  🚀 {name}: 启动中... [{pkg_type}]")
         print(f"     {type_icon} 包: {package}")
@@ -161,6 +167,7 @@ class MCPServerManager:
         name = server.get('name', 'unnamed')
         path = server.get('path')
         port = server.get('port')
+        env_vars = server.get('env', {})
         
         if not path or not port:
             print(f"  ❌ {name}: 缺少 path 或 port 配置")
@@ -183,13 +190,18 @@ class MCPServerManager:
                 print(f"     尝试路径: {config_dir_path}")
                 return None
         
-        # 准备环境变量
+        # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
         env = os.environ.copy()
         env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        env["npm_config_cache"] = f"/tmp/npm-cache-{port}"
+        env["NPX_HOME"] = f"/tmp/npx-{port}"
+        for key, value in env_vars.items():
+            env[key] = str(value)
         
+        # 优先使用镜像内预装的 mcp-proxy，避免 npx 并发安装
+        mcp_proxy_cmd = "mcp-proxy" if shutil.which("mcp-proxy") else "npx -y mcp-proxy"
         # 构建命令 (使用当前 Python 解释器 sys.executable，兼容仅有 python3 的环境)
-        # 使用 mcp-proxy (支持更好的连接管理和重连)
-        cmd = f'npx -y mcp-proxy --port {port} --server sse -- {sys.executable} {script_path}'
+        cmd = f'{mcp_proxy_cmd} --port {port} --server sse -- {sys.executable} {script_path}'
         
         print(f"  🚀 {name}: 启动中...")
         print(f"     路径: {script_path}")

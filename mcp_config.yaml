@@ -59,6 +59,28 @@ basicmcp:
     port: 8092
     enabled: true
   
+  - name: bash_command
+    path: "servers/bash_server.py"
+    port: 8094
+    enabled: true
+  
+  - name: prometheus
+    path: "servers/prometheus_server.py"
+    port: 8095
+    enabled: true
+    env:
+      PROMETHEUS_URL: "http://localhost:9090"
+  
+  - name: internet
+    path: "servers/internet_server.py"
+    port: 8096
+    enabled: true
+  
+  - name: connectivity_check
+    path: "servers/connectivity_server.py"
+    port: 8097
+    enabled: true
+  
   # - name: custom-tools
   #   path: "servers/custom_server.py"
   #   port: 8091

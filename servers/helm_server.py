@@ -7,9 +7,9 @@ Helm Chart MCP Server
 运行方式:
     # 直接运行 (stdio 模式，用于调试)
     python helm_server.py
-    
-    # 通过 supergateway 暴露为 SSE
-    npx -y supergateway --stdio "python helm_server.py" --port 8092
+
+    # 通过 mcp-proxy 暴露为 SSE（与启动器一致）
+    npx -y mcp-proxy --port 8092 --server sse -- python helm_server.py
 """
 
 import asyncio
@@ -278,6 +278,98 @@ async def list_tools():
                 "required": ["keyword"]
             }
         ),
+        # ============================================================
+        # helm/core 只读工具（与 Holmes helm/core 一致）
+        # ============================================================
+        Tool(
+            name="helm_list",
+            description="List all current Helm releases (all namespaces). Use to get all helm releases.",
+            inputSchema={"type": "object", "properties": {}}
+        ),
+        Tool(
+            name="helm_values",
+            description="Get Helm release values as JSON for any released helm chart.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
+        Tool(
+            name="helm_status",
+            description="Check the status of a Helm release.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
+        Tool(
+            name="helm_history",
+            description="Get the revision history of a Helm release.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
+        Tool(
+            name="helm_manifest",
+            description="Fetch the generated Kubernetes manifest for a Helm release.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
+        Tool(
+            name="helm_hooks",
+            description="Get the hooks for a Helm release.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
+        Tool(
+            name="helm_chart",
+            description="Show the chart used to create a Helm release.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
+        Tool(
+            name="helm_notes",
+            description="Show the notes provided by the Helm chart.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "release_name": {"type": "string", "description": "Release 名称"},
+                    "namespace": {"type": "string", "description": "命名空间"}
+                },
+                "required": ["release_name", "namespace"]
+            }
+        ),
     ]
 
 
@@ -475,6 +567,92 @@ async def call_tool(name: str, arguments: dict):
             charts = parse_helm_json(result["data"])
             if isinstance(charts, list):
                 return [TextContent(type="text", text=json.dumps(charts, indent=2, ensure_ascii=False))]
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    # ============================================================
+    # helm/core 只读工具
+    # ============================================================
+    elif name == "helm_list":
+        result = run_helm_command(["list", "-A"])
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_values":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["get", "values", "-a", release_name, "-n", namespace, "-o", "json"]
+        result = run_helm_command(args)
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_status":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["status", release_name, "-n", namespace]
+        result = run_helm_command(args)
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_history":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["history", release_name, "-n", namespace]
+        result = run_helm_command(args)
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_manifest":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["get", "manifest", release_name, "-n", namespace]
+        result = run_helm_command(args)
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_hooks":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["get", "hooks", release_name, "-n", namespace]
+        result = run_helm_command(args)
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_chart":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["get", "chart", release_name, "-n", namespace]
+        result = run_helm_command(args)
+        if result["success"]:
+            return [TextContent(type="text", text=result["data"])]
+        return [TextContent(type="text", text=f"错误: {result['error']}")]
+    
+    elif name == "helm_notes":
+        release_name = arguments.get("release_name")
+        namespace = arguments.get("namespace")
+        if not release_name or not namespace:
+            return [TextContent(type="text", text="错误: 缺少 release_name 或 namespace 参数")]
+        args = ["get", "notes", release_name, "-n", namespace]
+        result = run_helm_command(args)
+        if result["success"]:
             return [TextContent(type="text", text=result["data"])]
         return [TextContent(type="text", text=f"错误: {result['error']}")]
     

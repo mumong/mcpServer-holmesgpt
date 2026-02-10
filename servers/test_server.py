@@ -8,9 +8,9 @@
 运行方式:
     # 直接运行 (stdio 模式，用于调试)
     python test_server.py
-    
-    # 通过 supergateway 暴露为 SSE
-    npx -y supergateway --stdio "python test_server.py" --port 8083
+
+    # 通过 mcp-proxy 暴露为 SSE（与启动器一致）
+    npx -y mcp-proxy --port 8091 --server sse -- python test_server.py
 """
 
 import asyncio

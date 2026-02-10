@@ -54,3 +54,28 @@ data:
         path: "servers/helm_server.py"
         port: 8092
         enabled: true
+      
+      - name: bash_command
+        path: "servers/bash_server.py"
+        port: 8094
+        enabled: true
+        # 黑名单：只填敏感命令名，逗号分隔即可（可选；不填则使用内置危险命令黑名单）
+        env:
+          BASH_BLOCKED_COMMANDS: "rm,dd,mkfs,fdisk,parted,shred,reboot,halt,poweroff,shutdown"
+      
+      - name: prometheus
+        path: "servers/prometheus_server.py"
+        port: 8095
+        enabled: true
+        env:
+          PROMETHEUS_URL: "http://observability-prometheus.xnet.svc:9090"
+      
+      - name: internet
+        path: "servers/internet_server.py"
+        port: 8096
+        enabled: true
+      
+      - name: connectivity_check
+        path: "servers/connectivity_server.py"
+        port: 8097
+        enabled: true

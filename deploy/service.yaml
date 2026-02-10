@@ -23,3 +23,15 @@ spec:
     - name: k8s-mcp
       port: 8093
       targetPort: 8093
+    - name: bash-mcp
+      port: 8094
+      targetPort: 8094
+    - name: prometheus-mcp
+      port: 8095
+      targetPort: 8095
+    - name: internet-mcp
+      port: 8096
+      targetPort: 8096
+    - name: connect-mcp
+      port: 8097
+      targetPort: 8097
