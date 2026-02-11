@@ -10,6 +10,7 @@ Connectivity Check MCP Server
 """
 
 import asyncio
+import json
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
@@ -26,9 +27,27 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
+    # 记录每次工具调用，方便排查网络连通性检查「没有结果」的问题
+    try:
+        print(
+            "[connectivity-mcp] call_tool name=%s args=%s"
+            % (name, json.dumps(arguments, ensure_ascii=False)),
+            flush=True,
+        )
+    except Exception:
+        print("[connectivity-mcp] call_tool name=%s (args json dump failed)" % name, flush=True)
+
     result = connectivity.call_tool(name, arguments)
     if result is None:
+        print("[connectivity-mcp] result is None, treat as unknown tool", flush=True)
         result = "未知工具: {}".format(name)
+    else:
+        try:
+            r_str = str(result)
+            print("[connectivity-mcp] result_len=%d" % len(r_str), flush=True)
+        except Exception:
+            print("[connectivity-mcp] result convert to str failed", flush=True)
+
     return [TextContent(type="text", text=result)]
 
 

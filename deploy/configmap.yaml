@@ -22,11 +22,11 @@ data:
           ES_PASSWORD: "changeme"
           ES_SSL_SKIP_VERIFY: "true"
       
-      - name: kubernetes
-        type: npm
-        package: "mcp-server-kubernetes"
-        port: 8093
-        enabled: true
+      # - name: kubernetes
+      #   type: npm
+      #   package: "mcp-server-kubernetes"
+      #   port: 8093
+      #   enabled: true
       
       # - name: mysql
       #   type: uv
@@ -53,6 +53,12 @@ data:
       - name: helm-tools
         path: "servers/helm_server.py"
         port: 8092
+        enabled: true
+      
+      # K8s 只读：Holmes kubernetes/core 风格工具（kubectl describe/get/events/jq/top/lineage 等）
+      - name: k8s-core
+        path: "servers/k8s_core_server.py"
+        port: 8093
         enabled: true
       
       - name: bash_command

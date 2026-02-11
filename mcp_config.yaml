@@ -17,11 +17,12 @@ customermcp:
       ES_PASSWORD: "DKMt3H2aibAqLsky"
       ES_SSL_SKIP_VERIFY: "true"
   
-  - name: kubernetes
-    type: npm
-    package: "mcp-server-kubernetes"
-    port: 8093
-    enabled: true
+  # 已改用本地 k8s-core（Holmes kubernetes/core 风格），见 basicmcp k8s-core
+  # - name: kubernetes
+  #   type: npm
+  #   package: "mcp-server-kubernetes"
+  #   port: 8093
+  #   enabled: true
   
   # - name: github
   #   type: npm
@@ -57,6 +58,11 @@ basicmcp:
   - name: helm-tools
     path: "servers/helm_server.py"
     port: 8092
+    enabled: true
+  
+  - name: k8s-core
+    path: "servers/k8s_core_server.py"
+    port: 8093
     enabled: true
   
   - name: bash_command

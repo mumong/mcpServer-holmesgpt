@@ -12,6 +12,7 @@ Holmes 风格工具聚合 MCP Server
 """
 
 import asyncio
+import json
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
@@ -49,7 +50,24 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    return [TextContent(type="text", text=_call_tool(name, arguments))]
+    # 聚合 Server 的统一日志：可以看到是哪个具体工具被调用、参数是什么、结果有多大
+    try:
+        print(
+            "[holmes-tools-mcp] call_tool name=%s args=%s"
+            % (name, json.dumps(arguments, ensure_ascii=False)),
+            flush=True,
+        )
+    except Exception:
+        print("[holmes-tools-mcp] call_tool name=%s (args json dump failed)" % name, flush=True)
+
+    result = _call_tool(name, arguments)
+    try:
+        r_str = str(result)
+        print("[holmes-tools-mcp] result_len=%d" % len(r_str), flush=True)
+    except Exception:
+        print("[holmes-tools-mcp] result convert to str failed", flush=True)
+
+    return [TextContent(type="text", text=result)]
 
 
 async def main():
