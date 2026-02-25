@@ -81,10 +81,15 @@ sync-version:
 # 开发辅助
 # ============================================================
 
-# 本地运行
+# 本地运行（使用 mcp_config.yaml）
 run:
 	@echo "🏃 Running locally..."
 	python start.py
+
+# 本地部署/调试：安装依赖后启动，优先使用 mcp_config.local.yaml（若存在）
+run-local:
+	@chmod +x scripts/run-local.sh 2>/dev/null || true
+	@./scripts/run-local.sh
 
 # 列出配置的服务
 list:
@@ -113,8 +118,9 @@ help:
 	@echo "    make logs         - 查看日志"
 	@echo "    make sync-version - 同步版本到 yaml"
 	@echo ""
-	@echo "  开发:"
-	@echo "    make run          - 本地运行"
+	@echo "  开发/本地部署:"
+	@echo "    make run          - 本地运行（使用 mcp_config.yaml）"
+	@echo "    make run-local    - 本地部署/调试（自动依赖检查，优先 mcp_config.local.yaml）"
 	@echo "    make list         - 列出配置的服务"
 	@echo "    make test         - 测试客户端"
 	@echo ""
