@@ -16,11 +16,13 @@ kubectl_lineage_parents。
 
 import asyncio
 import json
+import sys
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
 
 from holmes_tools import kubernetes_core
+from holmes_tools.arg_utils import sanitize_arguments_for_tools
 
 server = Server("k8s-core-mcp-server")
 
@@ -32,28 +34,29 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
+    # 日志打到 stderr，避免污染 MCP stdio 的 JSON-RPC stdout
     try:
         print(
             "[k8s-core-mcp] call_tool name=%s args=%s"
             % (name, json.dumps(arguments, ensure_ascii=False)),
+            file=sys.stderr,
             flush=True,
         )
     except Exception:
-        print("[k8s-core-mcp] call_tool name=%s (args json dump failed)" % name, flush=True)
+        print("[k8s-core-mcp] call_tool name=%s (args json dump failed)" % name, file=sys.stderr, flush=True)
 
-    result = kubernetes_core.call_tool(name, arguments)
+    result = kubernetes_core.call_tool(name, sanitize_arguments_for_tools(arguments))
     if result is None:
-        print("[k8s-core-mcp] result is None, treat as unknown tool", flush=True)
+        print("[k8s-core-mcp] result is None, treat as unknown tool", file=sys.stderr, flush=True)
         result = "未知工具: {}".format(name)
     else:
         try:
             r_str = str(result)
-            print("[k8s-core-mcp] result_len=%d" % len(r_str), flush=True)
-            # 预览前 500 字符，便于区分成功输出与 "Command failed" 等错误（调试「语法错误」等提示）
+            print("[k8s-core-mcp] result_len=%d" % len(r_str), file=sys.stderr, flush=True)
             preview = (r_str[:500] + "..." if len(r_str) > 500 else r_str).replace("\n", " ")
-            print("[k8s-core-mcp] result_preview: %s" % preview, flush=True)
+            print("[k8s-core-mcp] result_preview: %s" % preview, file=sys.stderr, flush=True)
         except Exception:
-            print("[k8s-core-mcp] result convert to str failed", flush=True)
+            print("[k8s-core-mcp] result convert to str failed", file=sys.stderr, flush=True)
 
     return [TextContent(type="text", text=result)]
 

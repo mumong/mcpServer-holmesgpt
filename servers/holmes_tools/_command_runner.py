@@ -17,6 +17,10 @@ def _render(template_str: str, params: Dict[str, Any]) -> str:
     if Template is None:
         raise RuntimeError("jinja2 is required for kubernetes/helm tools. pip install jinja2")
     params = {k: (v if v is not None else "") for k, v in params.items()}
+    # 避免 Jinja2 全局 namespace 覆盖：当未显式传入 namespace 时，强制提供空字符串，
+    # 这样模板中的 {% if namespace %} 在未设置时为假，不会渲染出 -n <class 'jinja2.utils.Namespace'>。
+    if "namespace" not in params:
+        params["namespace"] = ""
     return Template(template_str).render(**params)
 
 

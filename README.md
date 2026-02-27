@@ -1,101 +1,112 @@
 # MCP Server Manager
 
-将 MCP 工具转换为 SSE 端点，供 HolmesGPT 等服务集成使用。
-一句话说明如何扩展使用新的mcp工具并且配置运行
-1. 写自己的mcp service 并且把它放在/servers下 或者使用第三方的mcp工具如npm的或者uv的或者golang的
-2. 将写好的文件写入到配置configmap.yaml里，里面定义好需要暴露的端口，
-3. 同步修改svc和deployment中关于port的暴露端口
-4. 编译镜像保存运行。
-5. 修改aiops的项目中的config.yaml文件,将新添加的服务填入aiops的配置configmap中。
-```
-      elasticsearch:
-        description: "Elasticsearch MCP 工具集 - 用于查询索引、搜索日志数据"
-        config:
-          url: "http://mcp-server-manager.mcp:8088/sse"
-          mode: "sse"
-        enabled: true
-```
-6. 重新加载aiops的configmap。让agent服务重新运行加载新的工具集合。
+将 MCP 工具转换为 SSE 端点，供 HolmesGPT 等 AIOps 服务集成使用。  
+通过 **mcp-proxy** 将 stdio MCP 转为 HTTP SSE，每个 MCP 对应一个端口上的 `/sse`。
+
+---
+
+## 如何扩展并运行新 MCP 工具（简要）
+
+1. **写 MCP 服务**：在 `servers/` 下写 Python MCP（或使用第三方 npm/uv 包）。
+2. **写配置**：在 `config/mcp_config.yaml`（本地）或 `deploy/configmap.yaml`（K8s）里增加一项，写好 `name`、`path`/`package`、`port`、`enabled`。
+3. **端口同步**：若部署到 K8s，在 `deploy/deployment.yaml` 和 `deploy/service.yaml` 中增加对应端口。
+4. **构建与运行**：本地用 `make run-local` 或 `python start.py`；K8s 用 `make build-push`、`make deploy`。
+5. **AIOps 侧**：在 AIOps 的 `config.yaml` / ConfigMap 的 `mcp_servers` 中增加该 MCP 的 `url: http://mcp-server-manager.<ns>:<port>/sse`、`mode: sse`，重载配置。
+
+详细步骤见 **[docs/EXTENDING.md](docs/EXTENDING.md)**。
+
+---
 
 ## 目录结构
 
 ```
 mcpstander/
-├── start.py             # 启动器
-├── mcp_config.yaml      # 本地配置文件 (开发用)
-├── mcp_client.py        # 测试客户端
-├── servers/             # 本地自定义 MCP 工具
-│   └── test_server.py
-├── deploy/              # K8s 部署文件
-│   ├── namespace.yaml
-│   ├── configmap.yaml   # 配置文件 (生产用)
+├── start.py                 # 统一启动器（读配置，为每个 MCP 起 mcp-proxy 子进程）
+├── mcp_client.py             # SSE 测试客户端
+├── config/                   # 配置文件（本地开发）
+│   ├── mcp_config.yaml       # 默认配置
+│   ├── mcp_config.example.yaml   # 本地覆盖示例（复制为 mcp_config.local.yaml 使用）
+│   └── mcp_config.local.yaml    # 本地覆盖（可选，已 gitignore）
+├── servers/                  # 本地自定义 MCP Server（stdio 协议）
+│   ├── test_server.py
+│   ├── helm_server.py
+│   ├── k8s_core_server.py
+│   └── holmes_tools/         # 能力实现（k8s/helm/prometheus 等）
+├── deploy/                   # K8s 部署
+│   ├── configmap.yaml        # 生产配置（内嵌 mcp_config.yaml 内容）
 │   ├── deployment.yaml
 │   └── service.yaml
+├── docs/
+│   └── EXTENDING.md          # 扩展与部署详细指南
+├── scripts/
+│   └── run-local.sh         # 本地一键启动（优先使用 config/mcp_config.local.yaml）
 ├── Dockerfile
 ├── Makefile
 └── VERSION
 ```
+
+---
 
 ## 快速开始
 
 ### 本地运行
 
 ```bash
+# 安装依赖
 pip install -r requirements.txt
+
+# 使用默认配置 config/mcp_config.yaml 启动
 python start.py
+# 或
+make run
+```
+
+本地调试时若不想改仓库内配置，可复制示例后使用本地配置：
+
+```bash
+cp config/mcp_config.example.yaml config/mcp_config.local.yaml
+# 编辑 config/mcp_config.local.yaml 后：
+make run-local
+```
+
+`make run-local` 会自动优先使用 `config/mcp_config.local.yaml`（若存在），并检查 `.venv` 与依赖。
+
+### 列出已配置服务
+
+```bash
+python start.py --list
+# 或
+make list
 ```
 
 ### K8s 部署
 
 ```bash
-# 构建并推送镜像
-make build-push
-
-# 部署
-make deploy
-
-# 查看状态
-make status
+make build-push    # 构建并推送镜像
+make deploy        # 部署到 K8s（namespace: mcp）
+make status        # 查看 Pod/Service
 ```
 
+---
+ 
 ## 配置说明
 
-编辑 `deploy/configmap.yaml` 配置 MCP 工具：
+- **本地**：编辑 `config/mcp_config.yaml`（或你的 `config/mcp_config.local.yaml`）。  
+- **K8s**：编辑 `deploy/configmap.yaml` 中 `data.mcp_config.yaml` 下的 YAML 内容；容器内挂载路径为 `/app/config/mcp_config.yaml`。
 
-```yaml
-data:
-  mcp_config.yaml: |
-    # 第三方 npm 包
-    customermcp:
-      - name: elasticsearch
-        type: npm
-        package: "@elastic/mcp-server-elasticsearch@0.3.1"
-        port: 8088
-        enabled: true
-        env:
-          ES_URL: "https://elasticsearch:9200"
-          ES_USERNAME: "elastic"
-          ES_PASSWORD: "changeme"
+配置结构：
 
-    # 本地自定义工具
-    basicmcp:
-      - name: test-tools
-        path: "servers/test_server.py"
-        port: 8091
-        enabled: true
-```
+- **customermcp**：第三方 MCP（npm 或 uv 包），每项需 `name`、`type`（npm/uv）、`package`、`port`、`enabled`，uv 需 `directory`，可选 `env`。
+- **basicmcp**：本地 Python MCP，每项需 `name`、`path`（相对项目根，如 `servers/test_server.py`）、`port`、`enabled`，可选 `env`。
 
-## HolmesGPT 集成
+启动器会为每一项启动：`mcp-proxy --port <port> --server sse -- <inner_cmd>`，其中本地为 `python <path>`，npm 为 `npx -y <package>` 等。
 
-### SSE 端点 URL 格式
+---
 
-```
-http://mcp-server-manager.<namespace>:<port>/sse
-```
+## HolmesGPT / AIOps 集成
 
-### 配置示例
-
-在 HolmesGPT 或其他服务的配置中添加：
+SSE 端点格式：`http://mcp-server-manager.<namespace>:<port>/sse`。  
+若集群内 namespace 为 `mcp`，则示例：
 
 ```yaml
 mcp_servers:
@@ -105,24 +116,18 @@ mcp_servers:
       url: "http://mcp-server-manager.mcp:8088/sse"
       mode: "sse"
     enabled: true
-  
+
   test-tools:
-    description: "测试工具集 - MCP 集成测试"
+    description: "测试工具集"
     config:
       url: "http://mcp-server-manager.mcp:8091/sse"
       mode: "sse"
-    llm_instructions: "只有当用户需要测试的时候才运行"
     enabled: true
 ```
 
-### 端口对应关系
+端口以你在 ConfigMap 与 deployment/service 中配置的 `port` 为准。
 
-| MCP 服务 | ConfigMap 中的 port | SSE URL |
-|----------|---------------------|---------|
-| elasticsearch | 8088 | `http://mcp-server-manager.mcp:8088/sse` |
-| test-tools | 8091 | `http://mcp-server-manager.mcp:8091/sse` |
-
-> **注意**: `.mcp` 是 namespace 名称，如果部署在其他 namespace，请相应修改。
+---
 
 ## Makefile 命令
 
@@ -132,38 +137,22 @@ mcp_servers:
 | `make push` | 推送镜像 |
 | `make build-push` | 构建并推送 |
 | `make deploy` | 部署到 K8s |
-| `make undeploy` | 卸载部署 |
-| `make delete` | 删除所有资源（包括 namespace） |
-| `make reload` | 更新配置并重启 |
-| `make status` | 查看状态 |
+| `make delete` | 删除部署资源（保留 namespace） |
+| `make reload` | 更新 ConfigMap 并重启 |
+| `make status` | 查看 Pod/Service/ConfigMap |
 | `make logs` | 查看日志 |
-| `make restart` | 重启服务 |
+| `make restart` | 重启 Deployment |
+| `make run` | 本地运行（默认 config/mcp_config.yaml） |
+| `make run-local` | 本地运行（优先 config/mcp_config.local.yaml） |
+| `make list` | 列出配置中的服务 |
+| `make test` | 运行 mcp_client 测试 |
 
-## 扩展新工具
-
-### 添加第三方 npm 包
-
-在 `deploy/configmap.yaml` 的 `customermcp` 部分添加：
-
-```yaml
-- name: github
-  type: npm
-  package: "@modelcontextprotocol/server-github"
-  port: 8089
-  enabled: true
-  env:
-    GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxx"
-```
-
-### 添加本地自定义工具
-
-1. 在 `servers/` 下创建 Python 文件
-2. 在 `deploy/configmap.yaml` 的 `basicmcp` 部分添加配置
-3. 重新构建镜像：`make build-push`
-4. 重启服务：`make restart`
+---
 
 ## 注意事项
 
-1. **端口同步**: 修改 ConfigMap 中的端口后，需要同步修改 `deployment.yaml` 和 `service.yaml`
-2. **镜像更新**: 修改 `start.py` 或 `servers/` 下的代码后，需要重新构建镜像
-3. **配置更新**: 只修改 ConfigMap 时，执行 `make reload` 即可
+1. **端口同步**：修改 ConfigMap 中某 MCP 的 `port` 后，需在 `deploy/deployment.yaml` 的 `ports` 和 `deploy/service.yaml` 的 `ports` 中同步增加或修改对应端口。
+2. **镜像更新**：修改 `start.py` 或 `servers/` 下代码后，需重新 `make build-push` 并 `make deploy` 或 `make restart`。
+3. **仅改配置**：只改 ConfigMap 时，执行 `make reload` 即可。
+
+更多扩展步骤、故障排查与验证方式见 **[docs/EXTENDING.md](docs/EXTENDING.md)**。

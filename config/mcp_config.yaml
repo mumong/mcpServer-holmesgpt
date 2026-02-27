@@ -1,5 +1,5 @@
 # MCP Server 配置文件
-# 运行: python start.py
+# 运行: python start.py  或  python start.py --config config/mcp_config.yaml
 
 # ============================================================
 # 第三方 MCP 包 (支持 npm 和 uv 两种类型)
@@ -16,14 +16,14 @@ customermcp:
       ES_USERNAME: "elastic"
       ES_PASSWORD: "DKMt3H2aibAqLsky"
       ES_SSL_SKIP_VERIFY: "true"
-  
+
   # 已改用本地 k8s-core（Holmes kubernetes/core 风格），见 basicmcp k8s-core
   # - name: kubernetes
   #   type: npm
   #   package: "mcp-server-kubernetes"
   #   port: 8093
   #   enabled: true
-  
+
   # - name: github
   #   type: npm
   #   package: "@modelcontextprotocol/server-github"
@@ -31,7 +31,7 @@ customermcp:
   #   enabled: false
   #   env:
   #     GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_xxx"
-  
+
   # --- uv 包示例 (Python) ---
   # - name: mysql
   #   type: uv                                      # Python uv 包
@@ -54,39 +54,39 @@ basicmcp:
     path: "servers/test_server.py"
     port: 8090
     enabled: true
-  
+
   - name: helm-tools
     path: "servers/helm_server.py"
     port: 8092
     enabled: true
-  
+
   - name: k8s-core
     path: "servers/k8s_core_server.py"
     port: 8093
     enabled: true
-  
+
   - name: bash_command
     path: "servers/bash_server.py"
     port: 8094
     enabled: true
-  
+
   - name: prometheus
     path: "servers/prometheus_server.py"
     port: 8095
     enabled: true
     env:
       PROMETHEUS_URL: "http://localhost:9090"
-  
+
   - name: internet
     path: "servers/internet_server.py"
     port: 8096
     enabled: true
-  
+
   - name: connectivity_check
     path: "servers/connectivity_server.py"
     port: 8097
     enabled: true
-  
+
   # - name: custom-tools
   #   path: "servers/custom_server.py"
   #   port: 8091

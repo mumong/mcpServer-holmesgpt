@@ -21,6 +21,8 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+from holmes_tools.arg_utils import sanitize_arguments_for_tools
+
 
 # 创建 MCP Server
 server = Server("helm-mcp-server")
@@ -376,7 +378,9 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """处理工具调用"""
-    
+    # MCP 入口层清洗：仅保留标量，避免误传对象导致命令注入/语法错误（与 Holmes 内置工具改造一致）
+    arguments = sanitize_arguments_for_tools(arguments or {})
+
     # ============================================================
     # helm_list_releases - 列出 releases
     # ============================================================

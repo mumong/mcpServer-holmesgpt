@@ -11,11 +11,13 @@ Prometheus MCP Server
 
 import asyncio
 import json
+import sys
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
 
 from holmes_tools import prometheus
+from holmes_tools.arg_utils import sanitize_arguments_for_tools
 
 server = Server("prometheus-mcp-server")
 
@@ -27,28 +29,27 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    # 记录每次工具调用的入参，便于排查「没有结果」的问题
+    # 日志打到 stderr，避免污染 MCP stdio 的 JSON-RPC stdout
     try:
         print(
             "[prometheus-mcp] call_tool name=%s args=%s"
             % (name, json.dumps(arguments, ensure_ascii=False)),
+            file=sys.stderr,
             flush=True,
         )
     except Exception:
-        # 打印失败不影响正常调用
-        print("[prometheus-mcp] call_tool name=%s (args json dump failed)" % name, flush=True)
+        print("[prometheus-mcp] call_tool name=%s (args json dump failed)" % name, file=sys.stderr, flush=True)
 
-    result = prometheus.call_tool(name, arguments)
+    result = prometheus.call_tool(name, sanitize_arguments_for_tools(arguments))
     if result is None:
-        print("[prometheus-mcp] result is None, treat as unknown tool", flush=True)
+        print("[prometheus-mcp] result is None, treat as unknown tool", file=sys.stderr, flush=True)
         result = "未知工具: {}".format(name)
     else:
-        # 避免日志过长，只打长度
         try:
             r_str = str(result)
-            print("[prometheus-mcp] result_len=%d" % len(r_str), flush=True)
+            print("[prometheus-mcp] result_len=%d" % len(r_str), file=sys.stderr, flush=True)
         except Exception:
-            print("[prometheus-mcp] result convert to str failed", flush=True)
+            print("[prometheus-mcp] result convert to str failed", file=sys.stderr, flush=True)
 
     return [TextContent(type="text", text=result)]
 

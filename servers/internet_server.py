@@ -11,11 +11,13 @@ Internet MCP Server
 
 import asyncio
 import json
+import sys
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
 
 from holmes_tools import internet
+from holmes_tools.arg_utils import sanitize_arguments_for_tools
 
 server = Server("internet-mcp-server")
 
@@ -32,21 +34,22 @@ async def call_tool(name: str, arguments: dict):
         print(
             "[internet-mcp] call_tool name=%s args=%s"
             % (name, json.dumps(arguments, ensure_ascii=False)),
+            file=sys.stderr,
             flush=True,
         )
     except Exception:
-        print("[internet-mcp] call_tool name=%s (args json dump failed)" % name, flush=True)
+        print("[internet-mcp] call_tool name=%s (args json dump failed)" % name, file=sys.stderr, flush=True)
 
-    result = internet.call_tool(name, arguments)
+    result = internet.call_tool(name, sanitize_arguments_for_tools(arguments))
     if result is None:
-        print("[internet-mcp] result is None, treat as unknown tool", flush=True)
+        print("[internet-mcp] result is None, treat as unknown tool", file=sys.stderr, flush=True)
         result = "未知工具: {}".format(name)
     else:
         try:
             r_str = str(result)
-            print("[internet-mcp] result_len=%d" % len(r_str), flush=True)
+            print("[internet-mcp] result_len=%d" % len(r_str), file=sys.stderr, flush=True)
         except Exception:
-            print("[internet-mcp] result convert to str failed", flush=True)
+            print("[internet-mcp] result convert to str failed", file=sys.stderr, flush=True)
 
     return [TextContent(type="text", text=result)]
 

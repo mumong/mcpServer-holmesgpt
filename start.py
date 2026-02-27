@@ -5,11 +5,11 @@ MCP Server 统一启动器
 根据配置文件启动多个 MCP Server (第三方 npm 包 + 本地自定义工具)
 
 用法:
-    python start.py                           # 使用默认配置文件 mcp_config.yaml
-    python start.py --config my_config.yaml   # 使用指定配置文件
-    python start.py --list                    # 列出所有配置的服务
+    python start.py                                   # 使用默认配置 config/mcp_config.yaml
+    python start.py --config config/my_config.yaml    # 使用指定配置文件
+    python start.py --list                            # 列出所有配置的服务
 
-配置文件格式见 mcp_config.yaml
+配置文件格式见 config/mcp_config.yaml 或 config/mcp_config.example.yaml
 """
 
 import os
@@ -349,8 +349,8 @@ def main():
     )
     parser.add_argument(
         "--config", "-c",
-        default="mcp_config.yaml",
-        help="配置文件路径 (默认: mcp_config.yaml)"
+        default="config/mcp_config.yaml",
+        help="配置文件路径 (默认: config/mcp_config.yaml)"
     )
     parser.add_argument(
         "--list", "-l",

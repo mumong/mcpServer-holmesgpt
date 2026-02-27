@@ -19,6 +19,7 @@ Thumbs.db
 deploy/secret.yaml
 .env
 mcp_config.local.yaml
+config/mcp_config.local.yaml
 
 # Logs
 *.log

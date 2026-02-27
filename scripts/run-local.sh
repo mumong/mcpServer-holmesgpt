@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # 本地启动 MCP Server Manager（与 Docker 部署同逻辑，便于调试）
-# 用法: ./scripts/run-local.sh  或  CONFIG=mcp_config.local.yaml ./scripts/run-local.sh
+# 用法: ./scripts/run-local.sh  或  CONFIG=config/mcp_config.local.yaml ./scripts/run-local.sh
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-CONFIG="${CONFIG:-mcp_config.yaml}"
-# 若未显式指定 CONFIG 且存在 mcp_config.local.yaml，则优先使用
-if [[ "$CONFIG" == "mcp_config.yaml" ]] && [[ -f "mcp_config.local.yaml" ]]; then
-  CONFIG="mcp_config.local.yaml"
+CONFIG="${CONFIG:-config/mcp_config.yaml}"
+# 若未显式指定 CONFIG 且存在 config/mcp_config.local.yaml，则优先使用
+if [[ "$CONFIG" == "config/mcp_config.yaml" ]] && [[ -f "config/mcp_config.local.yaml" ]]; then
+  CONFIG="config/mcp_config.local.yaml"
   echo "📄 Using local config: $CONFIG"
 fi
 
