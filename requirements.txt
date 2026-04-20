@@ -1,7 +1,8 @@
-# MCP Tools 依赖
-requests>=2.28.0
-mcp>=1.0.0
-pyyaml>=6.0
-jinja2>=3.0.0
-beautifulsoup4>=4.12.0
-markdownify>=0.11.0
+# MCP Tools 依赖 — 版本锁定，避免 build 时拉取不兼容版本
+# 更新版本前请在本地测试通过后再修改
+requests==2.32.5
+mcp==1.12.2
+pyyaml==6.0.1
+jinja2==3.1.6
+beautifulsoup4==4.13.4
+markdownify==1.2.2

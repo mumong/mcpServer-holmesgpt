@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Connectivity Check MCP Server
+Core Investigation MCP Server
 
-仅暴露 tcp_check 工具。
+仅暴露 TodoWrite 工具（任务分解与状态追踪）。
 
 运行方式:
-    python connectivity_server.py
-    npx -y mcp-proxy --port 8097 --server sse -- python connectivity_server.py
+    python core_investigation_server.py
+    npx -y mcp-proxy --port 8098 --server sse -- python core_investigation_server.py
 """
 
 import asyncio
@@ -15,17 +15,16 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
 
-from holmes_tools import connectivity
-from holmes_tools.arg_utils import sanitize_arguments_for_tools
+from holmes_tools import core_investigation
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result
 
-_SERVER = "connectivity-mcp"
-server = Server("connectivity-mcp-server")
+_SERVER = "core-investigation-mcp"
+server = Server("core-investigation-mcp-server")
 
 
 @server.list_tools()
 async def list_tools():
-    return connectivity.TOOLS
+    return core_investigation.TOOLS
 
 
 @server.call_tool()
@@ -33,7 +32,8 @@ async def call_tool(name: str, arguments: dict):
     log_tool_call(_SERVER, name, arguments)
     t0 = time.monotonic()
 
-    result = connectivity.call_tool(name, sanitize_arguments_for_tools(arguments))
+    # 注意：TodoWrite 接收 list/dict 参数，不做 sanitize
+    result = core_investigation.call_tool(name, arguments)
     if result is None:
         result = "未知工具: {}".format(name)
 

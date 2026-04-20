@@ -7,6 +7,8 @@ LABEL description="MCP Server Manager - 将 MCP 工具转换为 SSE 端点"
 # 构建参数
 ARG VERSION=1.0.0
 ARG KUBECTL_VERSION=v1.29.0
+ARG HELM_VERSION=v3.14.0
+ARG MCP_PROXY_VERSION=6.4.5
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1 \
@@ -18,11 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     curl \
+    jq \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # 预装 mcp-proxy，避免运行时多进程并发 npx 安装导致缓存冲突/损坏
-RUN npm install -g mcp-proxy
+RUN npm install -g mcp-proxy@${MCP_PROXY_VERSION}
 
 # 安装 kubectl（K8s core MCP 工具依赖）
 RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
@@ -31,7 +34,7 @@ RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubec
     && kubectl version --client
 
 # 安装 Helm 并预配置常用仓库
-RUN curl -fsSL https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz | tar -xzf - \
+RUN curl -fsSL https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz | tar -xzf - \
     && mv linux-amd64/helm /usr/local/bin/helm \
     && rm -rf linux-amd64 \
     && helm version --short \

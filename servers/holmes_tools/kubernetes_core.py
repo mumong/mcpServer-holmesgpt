@@ -32,7 +32,7 @@ _KUBERNETES_SPECS: Dict[str, tuple] = {
     ),
     "kubectl_find_resource": (
         "command",
-        "kubectl get -A --show-labels -o wide {{ kind }} | grep {{ keyword }}",
+        "kubectl get -A --show-labels -o wide {{ kind }} | grep -i '{{ keyword }}'",
     ),
     "kubectl_get_yaml": (
         "command",
@@ -44,7 +44,7 @@ _KUBERNETES_SPECS: Dict[str, tuple] = {
     ),
     "kubernetes_tabular_query": (
         "command",
-        "kubectl get {{ kind }} --all-namespaces -o custom-columns='{{ columns }}'{% if filter_pattern %} | (head -n 1; tail -n +2 | grep {{ filter_pattern }}){% endif %}",
+        "kubectl get {{ kind }} --all-namespaces -o custom-columns='{{ columns }}'{% if filter_pattern %} | (head -n 1; tail -n +2 | grep -E '{{ filter_pattern }}'){% endif %}",
     ),
     "kubectl_top_pods": ("command", "kubectl top pods -A"),
     "kubectl_top_nodes": ("command", "kubectl top nodes"),

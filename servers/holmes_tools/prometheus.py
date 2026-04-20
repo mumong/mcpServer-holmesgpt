@@ -1,18 +1,29 @@
 """
 prometheus 工具集：查询 Prometheus API。
 对应 Holmes 的 prometheus/metrics。配置：PROMETHEUS_URL（默认 http://localhost:9090/）。
+
+重要：Prometheus API 的 POST 接口使用 form-encoded body（data=），不是 JSON body（json=）。
+Holmes 原始实现使用 requests.request(method="POST", data=payload)，此处保持一致。
 """
 import json
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
 from mcp.types import Tool
 
 try:
+    from .mcp_logger import get_logger, log_http_request
+except ImportError:
+    from mcp_logger import get_logger, log_http_request
+
+try:
     import requests
 except ImportError:
     requests = None
+
+_logger = get_logger("prometheus")
 
 
 def _get_prometheus_url() -> str:
@@ -28,23 +39,46 @@ def _do_get(path: str, params: Optional[Dict] = None) -> str:
     if requests is None:
         return json.dumps({"error": "install 'requests' to use Prometheus tools."})
     url = urljoin(_get_prometheus_url(), path)
+    t0 = time.monotonic()
     try:
         r = requests.get(url, params=params or {}, timeout=_get_timeout())
+        elapsed = time.monotonic() - t0
+        log_http_request("GET", url, params_or_data=params,
+                         status_code=r.status_code, response_text=r.text, elapsed=elapsed)
         r.raise_for_status()
         return r.text
     except Exception as e:
+        elapsed = time.monotonic() - t0
+        log_http_request("GET", url, params_or_data=params,
+                         status_code=getattr(e, 'response', {}) and getattr(e.response, 'status_code', None),
+                         response_text=str(e), elapsed=elapsed)
         return json.dumps({"error": str(e), "url": url})
 
 
 def _do_post(path: str, data: Optional[Dict] = None) -> str:
+    """
+    POST 请求 Prometheus API。
+    注意：Prometheus 的 POST 接口（如 /api/v1/query, /api/v1/query_range）
+    接受 form-encoded body（data=），不是 JSON body（json=）。
+    Holmes 原始实现：requests.request(method="POST", data=payload)
+    """
     if requests is None:
         return json.dumps({"error": "install 'requests' to use Prometheus tools."})
     url = urljoin(_get_prometheus_url(), path)
+    t0 = time.monotonic()
     try:
-        r = requests.post(url, json=data or {}, timeout=_get_timeout())
+        # ⚠️ 关键修复：使用 data= 而非 json=，Prometheus API 要求 form-encoded POST
+        r = requests.post(url, data=data or {}, timeout=_get_timeout())
+        elapsed = time.monotonic() - t0
+        log_http_request("POST", url, params_or_data=data,
+                         status_code=r.status_code, response_text=r.text, elapsed=elapsed)
         r.raise_for_status()
         return r.text
     except Exception as e:
+        elapsed = time.monotonic() - t0
+        log_http_request("POST", url, params_or_data=data,
+                         status_code=getattr(e, 'response', {}) and getattr(e.response, 'status_code', None),
+                         response_text=str(e), elapsed=elapsed)
         return json.dumps({"error": str(e), "url": url})
 
 

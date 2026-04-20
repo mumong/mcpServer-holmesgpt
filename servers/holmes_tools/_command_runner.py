@@ -5,12 +5,17 @@
 import os
 import subprocess
 import tempfile
+import time
 from typing import Any, Dict
 
 try:
     from jinja2 import Template
 except ImportError:
     Template = None
+
+from .mcp_logger import get_logger, log_command
+
+logger = get_logger("command")
 
 
 def _render(template_str: str, params: Dict[str, Any]) -> str:
@@ -33,8 +38,11 @@ def run_command(
     try:
         cmd = _render(command_tpl, arguments)
     except Exception as e:
+        logger.error(f"[run_command] 模板渲染失败: tpl={command_tpl!r}, args={arguments}, error={e}")
         return f"Template error: {e}"
     cmd = os.path.expandvars(cmd)
+    logger.info(f"[run_command] 执行命令: {cmd}")
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
             cmd,
@@ -43,13 +51,28 @@ def run_command(
             text=True,
             timeout=timeout,
         )
-        out = (result.stdout or "") + (result.stderr or "")
+        elapsed = time.monotonic() - t0
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        out = stdout + stderr
         if result.returncode != 0:
+            logger.warning(
+                f"[run_command] ❌ 命令失败 (exit {result.returncode}, {elapsed:.2f}s): {cmd}\n"
+                f"  stdout({len(stdout)}): {stdout[:300]}\n"
+                f"  stderr({len(stderr)}): {stderr[:300]}"
+            )
             return f"Command failed (exit {result.returncode}):\n{cmd}\n{out}"
+        logger.info(
+            f"[run_command] ✅ 命令成功 ({elapsed:.2f}s, output={len(out)} chars): {cmd[:120]}"
+        )
         return out.strip() or "(no output)"
     except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        logger.error(f"[run_command] ⏰ 命令超时 ({elapsed:.2f}s, limit={timeout}s): {cmd}")
         return f"Command timed out after {timeout}s."
     except Exception as e:
+        elapsed = time.monotonic() - t0
+        logger.error(f"[run_command] 💥 异常 ({elapsed:.2f}s): {cmd}, error={e}")
         return str(e)
 
 
@@ -62,11 +85,14 @@ def run_script(
     try:
         script = _render(script_tpl, arguments)
     except Exception as e:
+        logger.error(f"[run_script] 模板渲染失败: args={arguments}, error={e}")
         return f"Template error: {e}"
     script = os.path.expandvars(script)
     if not script.strip().startswith("#!"):
         script = "#!/bin/bash\n" + script
+    logger.info(f"[run_script] 执行脚本 ({len(script)} chars): {script[:200]}")
     fd, path = tempfile.mkstemp(suffix=".sh")
+    t0 = time.monotonic()
     try:
         os.write(fd, script.encode("utf-8"))
         os.close(fd)
@@ -77,13 +103,26 @@ def run_script(
             text=True,
             timeout=timeout,
         )
-        out = (result.stdout or "") + (result.stderr or "")
+        elapsed = time.monotonic() - t0
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        out = stdout + stderr
         if result.returncode != 0:
+            logger.warning(
+                f"[run_script] ❌ 脚本失败 (exit {result.returncode}, {elapsed:.2f}s)\n"
+                f"  stdout({len(stdout)}): {stdout[:300]}\n"
+                f"  stderr({len(stderr)}): {stderr[:300]}"
+            )
             return f"Script failed (exit {result.returncode}):\n{out}"
+        logger.info(f"[run_script] ✅ 脚本成功 ({elapsed:.2f}s, output={len(out)} chars)")
         return out.strip() or "(no output)"
     except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        logger.error(f"[run_script] ⏰ 脚本超时 ({elapsed:.2f}s, limit={timeout}s)")
         return f"Script timed out after {timeout}s."
     except Exception as e:
+        elapsed = time.monotonic() - t0
+        logger.error(f"[run_script] 💥 异常 ({elapsed:.2f}s): error={e}")
         return str(e)
     finally:
         try:

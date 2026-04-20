@@ -85,3 +85,15 @@ data:
         path: "servers/connectivity_server.py"
         port: 8097
         enabled: true
+
+      - name: core-investigation
+        path: "servers/core_investigation_server.py"
+        port: 8098
+        enabled: true
+
+      - name: runbook
+        path: "servers/runbook_server.py"
+        port: 8099
+        enabled: true
+        env:
+          RUNBOOK_SEARCH_PATH: "/app/knowledge_base/runbooks"

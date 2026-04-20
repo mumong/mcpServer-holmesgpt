@@ -20,11 +20,16 @@ import os
 import re
 import subprocess
 import shutil
+import time
 from typing import Tuple
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+
+from holmes_tools.mcp_logger import log_tool_call, log_tool_result, log_command
+
+_SERVER = "bash-mcp"
 
 
 # 内置危险命令/模式（命中则拒绝）。无需配置即生效。
@@ -144,6 +149,7 @@ def make_command_safe(command_str: str) -> Tuple[bool, str]:
 
 def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
     """执行 bash 命令，返回 { "success", "stdout", "stderr", "returncode" }"""
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
             cmd,
@@ -153,6 +159,9 @@ def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
             text=True,
             timeout=timeout,
         )
+        elapsed = time.monotonic() - t0
+        log_command(cmd, returncode=result.returncode,
+                    stdout=result.stdout or "", stderr=result.stderr or "", elapsed=elapsed)
         return {
             "success": result.returncode == 0,
             "stdout": result.stdout or "",
@@ -160,6 +169,8 @@ def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
             "returncode": result.returncode,
         }
     except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        log_command(cmd, returncode=-1, stderr=f"命令执行超时 ({timeout}秒)", elapsed=elapsed)
         return {
             "success": False,
             "stdout": "",
@@ -167,6 +178,8 @@ def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
             "returncode": -1,
         }
     except Exception as e:
+        elapsed = time.monotonic() - t0
+        log_command(cmd, returncode=-1, stderr=str(e), elapsed=elapsed, error=e)
         return {
             "success": False,
             "stdout": "",
@@ -249,6 +262,9 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """处理工具调用"""
+    log_tool_call(_SERVER, name, arguments)
+    t0 = time.monotonic()
+
     if name == "run_bash_command":
         command = arguments.get("command", "").strip()
         timeout = int(arguments.get("timeout_seconds") or 60)

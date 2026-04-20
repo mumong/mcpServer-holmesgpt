@@ -16,12 +16,16 @@ import asyncio
 import json
 import subprocess
 import shutil
+import time
 from typing import List, Dict, Any
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from holmes_tools.arg_utils import sanitize_arguments_for_tools
+from holmes_tools.mcp_logger import log_tool_call, log_tool_result, log_command
+
+_SERVER = "helm-mcp"
 
 
 # 创建 MCP Server
@@ -378,6 +382,8 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """处理工具调用"""
+    log_tool_call(_SERVER, name, arguments)
+    t0 = time.monotonic()
     # MCP 入口层清洗：仅保留标量，避免误传对象导致命令注入/语法错误（与 Holmes 内置工具改造一致）
     arguments = sanitize_arguments_for_tools(arguments or {})
 
