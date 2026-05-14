@@ -1,9 +1,10 @@
 """
-Kubernetes 只读工具集（对应 Holmes kubernetes/core + live-metrics + kube-prometheus-stack + krew-extras）。
+Kubernetes 只读工具集（对应 Holmes kubernetes/core + kubernetes/logs + live-metrics + kube-prometheus-stack + krew-extras）。
 工具：kubectl_describe, kubectl_get_by_name, kubectl_get_by_kind_in_namespace, kubectl_get_by_kind_in_cluster,
 kubectl_find_resource, kubectl_get_yaml, kubectl_events, kubernetes_jq_query, kubernetes_tabular_query,
-kubernetes_count, kubectl_top_pods, kubectl_top_nodes, get_prometheus_target, kubectl_lineage_children,
-kubectl_lineage_parents。
+kubernetes_count, kubectl_logs, kubectl_previous_logs, kubectl_logs_all_containers, kubectl_previous_logs_all_containers,
+kubectl_container_logs, kubectl_container_previous_logs, kubectl_logs_grep, kubectl_logs_all_containers_grep,
+kubectl_top_pods, kubectl_top_nodes, get_prometheus_target, kubectl_lineage_children, kubectl_lineage_parents。
 依赖：kubectl、jq（部分工具）、jinja2。
 """
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,38 @@ _KUBERNETES_SPECS: Dict[str, tuple] = {
     "kubectl_events": (
         "command",
         "kubectl events --for {{ resource_type }}/{{ resource_name }}{% if namespace %} -n {{ namespace }}{% endif %}",
+    ),
+    "kubectl_logs": (
+        "command",
+        "kubectl logs {{ pod_name }} -n {{ namespace }}{% if tail %} --tail={{ tail }}{% endif %}",
+    ),
+    "kubectl_previous_logs": (
+        "command",
+        "kubectl logs {{ pod_name }} -n {{ namespace }} --previous{% if tail %} --tail={{ tail }}{% endif %}",
+    ),
+    "kubectl_logs_all_containers": (
+        "command",
+        "kubectl logs {{ pod_name }} -n {{ namespace }} --all-containers{% if tail %} --tail={{ tail }}{% endif %}",
+    ),
+    "kubectl_previous_logs_all_containers": (
+        "command",
+        "kubectl logs {{ pod_name }} -n {{ namespace }} --previous --all-containers{% if tail %} --tail={{ tail }}{% endif %}",
+    ),
+    "kubectl_container_logs": (
+        "command",
+        "kubectl logs {{ pod_name }} -c {{ container_name }} -n {{ namespace }}{% if tail %} --tail={{ tail }}{% endif %}",
+    ),
+    "kubectl_container_previous_logs": (
+        "command",
+        "kubectl logs {{ pod_name }} -c {{ container_name }} -n {{ namespace }} --previous{% if tail %} --tail={{ tail }}{% endif %}",
+    ),
+    "kubectl_logs_grep": (
+        "command",
+        "kubectl logs {{ pod_name }} -n {{ namespace }}{% if tail %} --tail={{ tail }}{% endif %} | grep -i -- '{{ search_term }}'",
+    ),
+    "kubectl_logs_all_containers_grep": (
+        "command",
+        "kubectl logs {{ pod_name }} -n {{ namespace }} --all-containers{% if tail %} --tail={{ tail }}{% endif %} | grep -i -- '{{ search_term }}'",
     ),
     "kubernetes_tabular_query": (
         "command",
@@ -87,6 +120,8 @@ def _normalize_kubectl_args(args: dict) -> dict:
         out["kind"] = str(out["kind"]).strip().lower()
     if out.get("resource_type"):
         out["resource_type"] = str(out["resource_type"]).strip().lower()
+    if out.get("tail"):
+        out["tail"] = str(out["tail"]).strip()
     return out
 
 
@@ -161,6 +196,90 @@ TOOLS: List[Tool] = [
         inputSchema=_input_schema(
             ["resource_type", "resource_name"],
             {"resource_type": {"type": "string"}, "resource_name": {"type": "string"}, "namespace": {"type": "string"}},
+        ),
+    ),
+    Tool(
+        name="kubectl_logs",
+        description="Run kubectl logs on a single Kubernetes pod. Use only with an exact pod name, not deployment/service. Optional tail limits returned lines.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace"],
+            {"pod_name": {"type": "string"}, "namespace": {"type": "string"}, "tail": {"type": "integer"}},
+        ),
+    ),
+    Tool(
+        name="kubectl_previous_logs",
+        description="Run kubectl logs --previous on a single Kubernetes pod. Use for crashed/restarted containers to see logs before the last crash.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace"],
+            {"pod_name": {"type": "string"}, "namespace": {"type": "string"}, "tail": {"type": "integer"}},
+        ),
+    ),
+    Tool(
+        name="kubectl_logs_all_containers",
+        description="Run kubectl logs --all-containers on a single Kubernetes pod.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace"],
+            {"pod_name": {"type": "string"}, "namespace": {"type": "string"}, "tail": {"type": "integer"}},
+        ),
+    ),
+    Tool(
+        name="kubectl_previous_logs_all_containers",
+        description="Run kubectl logs --previous --all-containers on a single Kubernetes pod.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace"],
+            {"pod_name": {"type": "string"}, "namespace": {"type": "string"}, "tail": {"type": "integer"}},
+        ),
+    ),
+    Tool(
+        name="kubectl_container_logs",
+        description="Run kubectl logs for one named container in a multi-container pod.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace", "container_name"],
+            {
+                "pod_name": {"type": "string"},
+                "namespace": {"type": "string"},
+                "container_name": {"type": "string"},
+                "tail": {"type": "integer"},
+            },
+        ),
+    ),
+    Tool(
+        name="kubectl_container_previous_logs",
+        description="Run kubectl logs --previous for one named container in a multi-container pod.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace", "container_name"],
+            {
+                "pod_name": {"type": "string"},
+                "namespace": {"type": "string"},
+                "container_name": {"type": "string"},
+                "tail": {"type": "integer"},
+            },
+        ),
+    ),
+    Tool(
+        name="kubectl_logs_grep",
+        description="Search current logs of one pod with grep -i. Use only with an exact pod name.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace", "search_term"],
+            {
+                "pod_name": {"type": "string"},
+                "namespace": {"type": "string"},
+                "search_term": {"type": "string"},
+                "tail": {"type": "integer"},
+            },
+        ),
+    ),
+    Tool(
+        name="kubectl_logs_all_containers_grep",
+        description="Search current logs across all containers in one pod with grep -i.",
+        inputSchema=_input_schema(
+            ["pod_name", "namespace", "search_term"],
+            {
+                "pod_name": {"type": "string"},
+                "namespace": {"type": "string"},
+                "search_term": {"type": "string"},
+                "tail": {"type": "integer"},
+            },
         ),
     ),
     Tool(

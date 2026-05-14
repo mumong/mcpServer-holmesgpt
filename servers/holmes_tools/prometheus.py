@@ -26,6 +26,39 @@ except ImportError:
 _logger = get_logger("prometheus")
 
 
+def _prometheus_http_error_payload(
+    *,
+    response_text: str,
+    url: str,
+    params_or_data: Optional[Dict],
+    error: Exception,
+) -> str:
+    """Preserve Prometheus API error details for the LLM/tool caller."""
+    try:
+        payload = json.loads(response_text or "{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    payload.setdefault("status", "error")
+    payload["http_error"] = str(error)
+    payload["url"] = url
+    status_code = getattr(getattr(error, "response", None), "status_code", None)
+    if status_code:
+        payload["http_status"] = status_code
+
+    if isinstance(params_or_data, dict):
+        query = params_or_data.get("query")
+        if query:
+            payload["query"] = query
+
+    if response_text and "raw_response" not in payload:
+        payload["raw_response"] = response_text[:2000]
+
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _get_prometheus_url() -> str:
     u = os.environ.get("PROMETHEUS_URL", "http://localhost:9090/").strip()
     return u if u.endswith("/") else u + "/"
@@ -49,10 +82,16 @@ def _do_get(path: str, params: Optional[Dict] = None) -> str:
         return r.text
     except Exception as e:
         elapsed = time.monotonic() - t0
+        response_text = getattr(getattr(e, "response", None), "text", "") or ""
         log_http_request("GET", url, params_or_data=params,
                          status_code=getattr(e, 'response', {}) and getattr(e.response, 'status_code', None),
-                         response_text=str(e), elapsed=elapsed)
-        return json.dumps({"error": str(e), "url": url})
+                         response_text=response_text or str(e), elapsed=elapsed)
+        return _prometheus_http_error_payload(
+            response_text=response_text,
+            url=url,
+            params_or_data=params,
+            error=e,
+        )
 
 
 def _do_post(path: str, data: Optional[Dict] = None) -> str:
@@ -76,10 +115,16 @@ def _do_post(path: str, data: Optional[Dict] = None) -> str:
         return r.text
     except Exception as e:
         elapsed = time.monotonic() - t0
+        response_text = getattr(getattr(e, "response", None), "text", "") or ""
         log_http_request("POST", url, params_or_data=data,
                          status_code=getattr(e, 'response', {}) and getattr(e.response, 'status_code', None),
-                         response_text=str(e), elapsed=elapsed)
-        return json.dumps({"error": str(e), "url": url})
+                         response_text=response_text or str(e), elapsed=elapsed)
+        return _prometheus_http_error_payload(
+            response_text=response_text,
+            url=url,
+            params_or_data=data,
+            error=e,
+        )
 
 
 def _run_list_prometheus_rules(arguments: dict) -> str:
