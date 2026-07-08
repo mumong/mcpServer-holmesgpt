@@ -64,6 +64,7 @@ mcpstander/
 | MCP 名称 | 端口 | 类型 | 说明 |
 |---|---:|---|---|
 | `elasticsearch` | 8088 | 第三方 npm MCP | Elasticsearch 查询，当前部署配置中为 disabled |
+| `aiops-case` | 8089 | 本地 Python MCP | 根据异常 Pod 调用 data 项目采集 Kubernetes / Prometheus / logging / DeepFlow / topology case package |
 | `test-tools` | 8091 | 本地 Python MCP | 测试工具 |
 | `helm-tools` | 8092 | 本地 Python MCP | Helm list / values / status / history / manifest 等 |
 | `k8s-core` | 8093 | 本地 Python MCP | Kubernetes describe / get / events / logs / top / jq / lineage 等 |
@@ -142,6 +143,16 @@ make reload
 make build-push
 make deploy
 ```
+
+### aiops-case 数据目录挂载
+
+`aiops-case` 不是无状态查询工具。它会调用 data 项目的采集脚本生成 case package，因此容器内必须能访问：
+
+- `AIOPS_DATASET_ROOT=/app/aiops-data`
+- `AIOPS_CASES_DIR=/app/aiops-data/cases`
+- `AIOPS_COLLECT_SCRIPT=/app/aiops-data/scripts/collect_case.py`
+
+当前研发集群的部署 YAML 使用 `hostPath` 将 master 节点上的 `/root/huhu/agent/combine-aiops-mcp/data` 挂载到 `/app/aiops-data`，并通过 `nodeSelector` 将 `mcp-server-manager` 调度到 `master`。如果迁移到生产环境，应改为镜像内置数据采集包或 PVC/NFS 挂载，不要假设每个节点都有这个本地路径。
 
 ---
 

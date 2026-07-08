@@ -45,6 +45,24 @@ data:
     # 本地自定义 MCP Server
     # ============================================================
     basicmcp:
+      - name: aiops-case
+        path: "servers/aiops_case_server.py"
+        port: 8089
+        enabled: true
+        env:
+          AIOPS_CASES_DIR: "/app/aiops-cases"
+          PROMETHEUS_URL: "http://observability-prometheus.xnet.svc:9090"
+          DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+
+      - name: aiops-observability-fine
+        path: "servers/aiops_observability_fine_server.py"
+        port: 8090
+        enabled: true
+        env:
+          AIOPS_CASES_DIR: "/app/aiops-cases"
+          PROMETHEUS_URL: "http://observability-prometheus.xnet.svc:9090"
+          DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+
       - name: test-tools
         path: "servers/test_server.py"
         port: 8091

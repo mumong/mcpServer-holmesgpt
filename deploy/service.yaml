@@ -14,6 +14,12 @@ spec:
     - name: es-mcp
       port: 8088
       targetPort: 8088
+    - name: aiops-case
+      port: 8089
+      targetPort: 8089
+    - name: aiops-fine
+      port: 8090
+      targetPort: 8090
     - name: test-mcp
       port: 8091
       targetPort: 8091

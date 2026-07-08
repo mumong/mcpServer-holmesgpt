@@ -10,6 +10,71 @@
 
 ---
 
+## AIOps 可观测 MCP
+
+本项目内置两个 AIOps 可观测 MCP server：
+
+- `aiops-case`，端口 `8089`：粗粒度 case 工具，默认给 Robusta Agent 主流程使用。
+- `aiops-observability-fine`，端口 `8090`：细粒度 Pod 级观测工具，默认在 Robusta 中关闭，调试/专家模式按需开启。
+
+生产运行时不依赖 `data` 目录，也不调用 `../data/scripts/collect_case.py`。case package 默认写入：
+
+```bash
+AIOPS_CASES_DIR=/app/aiops-cases
+```
+
+### 粗粒度工具
+
+```text
+collect_aiops_case(namespace, pod, scenario?, start?, end?, window_minutes?)
+get_aiops_case(case_id)
+get_aiops_case_evidence(case_id, evidence_ref)
+search_aiops_cases(...)
+```
+
+### 细粒度工具
+
+```text
+resolve_aiops_entity(namespace, pod)
+query_aiops_k8s_snapshot(namespace, pod, window?)
+query_aiops_metrics(namespace, pod, window?)
+query_aiops_logs(namespace, pod, window?)
+query_aiops_deepflow_flows(namespace, pod, window?)
+build_aiops_topology(namespace, pod, window?)
+```
+
+细粒度工具仍然是 Pod 级、时间窗口受控、结构化返回；第一版不让模型直接传任意 PromQL、ES DSL 或 ClickHouse SQL。
+
+### OOMKilled 测试 Pod
+
+部署：
+
+```bash
+kubectl apply -f deploy/examples/aiops-oom-business.yaml
+kubectl get pod -n aiops-temp -w
+```
+
+确认异常：
+
+```bash
+kubectl describe pod -n aiops-temp aiops-oom-business
+kubectl logs -n aiops-temp aiops-oom-business --previous --tail=80
+```
+
+清理：
+
+```bash
+kubectl delete -f deploy/examples/aiops-oom-business.yaml
+```
+
+本地测试：
+
+```bash
+python -m unittest tests.test_aiops_case_tool tests.test_aiops_observability_fine tests.test_aiops_case_deploy -v
+```
+
+---
+
 ## 它能做什么
 
 向 Agent 提问，它会自动调用工具采集证据，定位根因，输出诊断报告：

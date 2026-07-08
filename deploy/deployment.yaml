@@ -15,6 +15,8 @@ spec:
       labels:
         app: mcp-server-manager
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: master
       serviceAccountName: mcp-server-manager
       containers:
         - name: mcp-server-manager
@@ -27,6 +29,10 @@ spec:
             # 端口需要与 ConfigMap 中的 port 配置一致
             - name: es-mcp
               containerPort: 8088
+            - name: aiops-case
+              containerPort: 8089
+            - name: aiops-fine
+              containerPort: 8090
             - name: test-mcp
               containerPort: 8091
             - name: helm-mcp
@@ -49,6 +55,8 @@ spec:
             - name: config
               mountPath: /app/config
               readOnly: true
+            - name: aiops-cases
+              mountPath: /app/aiops-cases
           resources:
             requests:
               memory: "1G"
@@ -60,3 +68,7 @@ spec:
         - name: config
           configMap:
             name: mcp-config
+        - name: aiops-cases
+          hostPath:
+            path: /root/huhu/agent/combine-aiops-mcp/aiops-cases
+            type: DirectoryOrCreate

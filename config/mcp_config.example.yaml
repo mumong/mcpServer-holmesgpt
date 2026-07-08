@@ -7,6 +7,24 @@
 customermcp: []
 
 basicmcp:
+  - name: aiops-case
+    path: "servers/aiops_case_server.py"
+    port: 8089
+    enabled: true
+    env:
+      AIOPS_CASES_DIR: "./aiops-cases"
+      PROMETHEUS_URL: "http://localhost:9090"
+      DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+
+  - name: aiops-observability-fine
+    path: "servers/aiops_observability_fine_server.py"
+    port: 8090
+    enabled: false
+    env:
+      AIOPS_CASES_DIR: "./aiops-cases"
+      PROMETHEUS_URL: "http://localhost:9090"
+      DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+
   - name: test-tools
     path: "servers/test_server.py"
     port: 8091
