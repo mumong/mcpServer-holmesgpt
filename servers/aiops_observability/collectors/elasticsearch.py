@@ -24,29 +24,38 @@ except ImportError:  # pragma: no cover
 
 
 def _query_body(namespace: str, pod: str, pod_uid: str | None, start: str, end: str, max_records: int) -> dict[str, Any]:
-    should_terms = [
-        {"term": {"kubernetes.namespace": namespace}},
-        {"term": {"kubernetes.namespace_name": namespace}},
+    # Pod identity is REQUIRED, not optional: otherwise a namespace-only match
+    # returns logs from every pod in the namespace and mis-attributes them to the
+    # target pod. Tolerate Filebeat field-name variants inside the required clause.
+    pod_identity_terms: list[dict[str, Any]] = [
         {"term": {"kubernetes.pod.name": pod}},
         {"term": {"kubernetes.pod_name": pod}},
+        {"term": {"kubernetes.pod.name.keyword": pod}},
     ]
     if pod_uid:
-        should_terms.extend(
+        pod_identity_terms.extend(
             [
                 {"term": {"kubernetes.pod.uid": pod_uid}},
                 {"term": {"kubernetes.pod.uid.keyword": pod_uid}},
             ]
         )
+    namespace_terms = [
+        {"term": {"kubernetes.namespace": namespace}},
+        {"term": {"kubernetes.namespace_name": namespace}},
+    ]
+    must_clauses: list[dict[str, Any]] = [
+        {"range": {"@timestamp": {"gte": start, "lte": end}}},
+        # Required: the log line must belong to THIS pod (any known field variant).
+        {"bool": {"should": pod_identity_terms, "minimum_should_match": 1}},
+    ]
+    filter_clauses: list[dict[str, Any]] = []
+    if namespace:
+        # Namespace narrows results but is a filter, never the sole match reason.
+        filter_clauses.append({"bool": {"should": namespace_terms, "minimum_should_match": 1}})
     return {
         "size": max_records,
         "sort": [{"@timestamp": "desc"}],
-        "query": {
-            "bool": {
-                "must": [{"range": {"@timestamp": {"gte": start, "lte": end}}}],
-                "should": should_terms,
-                "minimum_should_match": 1,
-            }
-        },
+        "query": {"bool": {"must": must_clauses, "filter": filter_clauses}},
     }
 
 

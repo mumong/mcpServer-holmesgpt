@@ -130,6 +130,18 @@ class ElasticsearchCollectorTests(unittest.TestCase):
         self.assertEqual(result.coverage, "present")
         self.assertIn("kubectl exec", result.evidence[0].summary)
 
+    def test_query_requires_pod_identity_not_namespace_only(self):
+        # Regression: a namespace-only match must NOT return other pods' logs.
+        body = elasticsearch._query_body("monitor", "vma-node-exporter-c8qtj", "uid-1", "s", "e", 50)
+        q = body["query"]["bool"]
+        must_blob = json.dumps(q["must"])
+        # pod identity is a required (must) clause
+        self.assertIn("vma-node-exporter-c8qtj", must_blob)
+        self.assertIn("kubernetes.pod.name", must_blob)
+        # namespace lives only in filter, never as a standalone should at top level
+        self.assertNotIn("namespace", json.dumps(q.get("should", [])))
+        self.assertIn("namespace", json.dumps(q.get("filter", [])))
+
     def test_exec_mode_absent_when_no_credentials(self):
         import os
         with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}), \
