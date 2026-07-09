@@ -7,6 +7,7 @@ coverage states (present/empty/absent/error), honest error handling without
 stack traces, and key evidence invariants.
 """
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -107,12 +108,38 @@ class PrometheusCollectorTests(unittest.TestCase):
 
 
 class ElasticsearchCollectorTests(unittest.TestCase):
-    def test_absent_when_url_missing(self):
-        result = elasticsearch.collect_elasticsearch(
-            elasticsearch_url="", index="filebeat-*", namespace="ns", pod="p",
-            pod_uid=None, start="s", end="e", timeout=5, max_records=10,
-        )
+    def test_absent_when_url_missing_and_exec_disabled(self):
+        import os
+        with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "false", "ELASTICSEARCH_URL": "", "ES_URL": ""}):
+            result = elasticsearch.collect_elasticsearch(
+                elasticsearch_url="", index="filebeat-*", namespace="ns", pod="p",
+                pod_uid=None, start="s", end="e", timeout=5, max_records=10,
+            )
         self.assertEqual(result.coverage, "absent")
+
+    def test_exec_mode_auto_fetches_creds_and_returns_present(self):
+        import os
+        hits = {"hits": {"hits": [{"_source": {"@timestamp": "t", "message": "oom growth"}}]}}
+        with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}), \
+             patch.object(elasticsearch._kube, "secret_value", side_effect=["elastic", "pw"]), \
+             patch.object(elasticsearch._kube, "exec_in_pod", return_value=(True, json.dumps(hits), "")):
+            result = elasticsearch.collect_elasticsearch(
+                elasticsearch_url="", index="filebeat-*", namespace="aiops-temp", pod="oom-pod",
+                pod_uid="uid", start="s", end="e", timeout=5, max_records=10,
+            )
+        self.assertEqual(result.coverage, "present")
+        self.assertIn("kubectl exec", result.evidence[0].summary)
+
+    def test_exec_mode_absent_when_no_credentials(self):
+        import os
+        with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}), \
+             patch.object(elasticsearch._kube, "secret_value", return_value=None):
+            result = elasticsearch.collect_elasticsearch(
+                elasticsearch_url="", index="filebeat-*", namespace="ns", pod="p",
+                pod_uid=None, start="s", end="e", timeout=5, max_records=10,
+            )
+        self.assertEqual(result.coverage, "absent")
+        self.assertIn("凭证", result.error or "")
 
     def test_present_and_empty_paths(self):
         hits_payload = {"hits": {"hits": [{"_source": {"@timestamp": "t", "message": "oom"}}]}}
@@ -142,20 +169,37 @@ class ElasticsearchCollectorTests(unittest.TestCase):
 
 
 class DeepflowCollectorTests(unittest.TestCase):
-    def test_absent_without_url_and_empty_without_pod_ip(self):
-        absent = deepflow.collect_deepflow(
-            clickhouse_url="", clickhouse_database="flow_log", namespace="ns", pod="p",
-            pod_ip="10.0.0.1", node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
-            timeout=5, max_records=10,
-        )
+    def test_absent_when_url_missing_and_exec_disabled(self):
+        import os
+        with patch.dict(os.environ, {"AIOPS_CLICKHOUSE_EXEC_ENABLED": "false", "DEEPFLOW_CLICKHOUSE_URL": "", "CLICKHOUSE_URL": ""}):
+            absent = deepflow.collect_deepflow(
+                clickhouse_url="", clickhouse_database="flow_log", namespace="ns", pod="p",
+                pod_ip="10.0.0.1", node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
+                timeout=5, max_records=10,
+            )
         self.assertEqual(absent.coverage, "absent")
 
+    def test_empty_without_pod_ip(self):
         empty = deepflow.collect_deepflow(
             clickhouse_url="http://ch:8123", clickhouse_database="flow_log", namespace="ns", pod="p",
             pod_ip=None, node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
             timeout=5, max_records=10,
         )
         self.assertEqual(empty.coverage, "empty")
+
+    def test_exec_mode_queries_clickhouse_and_returns_present(self):
+        import os
+        rows = {"data": [{"trace_id": "abc", "l7_protocol_str": "HTTP", "ip4_0": "10.0.0.10"}]}
+        with patch.dict(os.environ, {"AIOPS_CLICKHOUSE_EXEC_ENABLED": "true", "DEEPFLOW_CLICKHOUSE_URL": "", "CLICKHOUSE_URL": ""}), \
+             patch.object(deepflow._kube, "exec_in_pod", return_value=(True, json.dumps(rows), "")):
+            result = deepflow.collect_deepflow(
+                clickhouse_url="", clickhouse_database="flow_log", namespace="aiops-temp", pod="pod",
+                pod_ip="10.0.0.10", node="master", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
+                timeout=5, max_records=10,
+            )
+        self.assertEqual(result.coverage, "present")
+        self.assertEqual(result.evidence[0].confidence, "medium")  # weak, never high
+        self.assertIn("kubectl exec", result.evidence[0].summary)
 
     def test_present_marks_weak_pod_ip_trace_correlation(self):
         payload = {"data": [{"trace_id": "abc", "l7_protocol": "HTTP"}]}
