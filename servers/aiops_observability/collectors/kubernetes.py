@@ -39,6 +39,71 @@ def get_pod(namespace: str, pod: str, timeout: int = 30) -> tuple[dict[str, Any]
         return None, f"invalid pod json: {exc}"
 
 
+def _get_json(kind: str, name: str, namespace: str, timeout: int = 30) -> dict[str, Any] | None:
+    args = ["get", kind, name, "-o", "json"]
+    if namespace:
+        args.extend(["-n", namespace])
+    ok, out = _run_kubectl(args, timeout=timeout)
+    if not ok:
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+
+def resolve_owner_chain(pod_json: dict[str, Any], namespace: str, timeout: int = 30) -> list[dict[str, Any]]:
+    """Walk ownerReferences upward: Pod -> ReplicaSet -> Deployment (best effort, bounded)."""
+    chain: list[dict[str, Any]] = []
+    obj = pod_json
+    seen: set[tuple[str, str]] = set()
+    for _ in range(4):
+        owners = (obj.get("metadata", {}) or {}).get("ownerReferences") or []
+        if not owners:
+            break
+        owner = owners[0]
+        kind = owner.get("kind")
+        name = owner.get("name")
+        if not kind or not name or (kind, name) in seen:
+            break
+        seen.add((kind, name))
+        chain.append({"kind": kind, "name": name})
+        nxt = _get_json(str(kind).lower(), str(name), namespace, timeout=timeout)
+        if nxt is None:
+            break
+        obj = nxt
+    return chain
+
+
+def matching_services(namespace: str, pod_labels: dict[str, Any], timeout: int = 30) -> list[dict[str, Any]]:
+    """Find Services in the namespace whose non-empty selector is satisfied by the Pod labels."""
+    if not namespace or not pod_labels:
+        return []
+    ok, out = _run_kubectl(["get", "svc", "-n", namespace, "-o", "json"], timeout=timeout)
+    if not ok:
+        return []
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    result: list[dict[str, Any]] = []
+    for svc in payload.get("items", []) or []:
+        selector = ((svc.get("spec", {}) or {}).get("selector")) or {}
+        if not selector:
+            continue
+        if all(str(pod_labels.get(k)) == str(v) for k, v in selector.items()):
+            spec = svc.get("spec", {}) or {}
+            result.append(
+                {
+                    "name": (svc.get("metadata", {}) or {}).get("name"),
+                    "selector": selector,
+                    "cluster_ip": spec.get("clusterIP"),
+                    "ports": [{"port": p.get("port"), "targetPort": p.get("targetPort")} for p in (spec.get("ports") or [])],
+                }
+            )
+    return result
+
+
 def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 120) -> SourceResult:
     pod_json, error = get_pod(namespace, pod, timeout=timeout)
     if error:
@@ -79,6 +144,9 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
                 }
             )
 
+    labels = meta.get("labels") or {}
+    owner_chain = resolve_owner_chain(pod_json, ns, timeout=timeout)
+    services = matching_services(ns, labels, timeout=timeout)
     records = [
         {
             "pod": name,
@@ -87,12 +155,14 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
             "pod_ip": status.get("podIP"),
             "node": spec.get("nodeName"),
             "phase": status.get("phase"),
-            "labels": meta.get("labels") or {},
+            "labels": labels,
             "containers": [c.get("name") for c in spec.get("containers") or [] if c.get("name")],
             "container_statuses": container_statuses,
             "last_terminated": last_terminated,
             "deletion_timestamp": meta.get("deletionTimestamp"),
             "finalizers": meta.get("finalizers") or [],
+            "owner_chain": owner_chain,
+            "services": services,
         }
     ]
 

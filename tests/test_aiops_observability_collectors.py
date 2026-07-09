@@ -16,6 +16,7 @@ from servers.aiops_observability.collectors import (
     kubernetes,
     prometheus,
 )
+from servers.aiops_observability.topology import build_topology
 
 
 class _Resp:
@@ -172,6 +173,42 @@ class DeepflowCollectorTests(unittest.TestCase):
         self.assertEqual(deepflow._clickhouse_datetime("2026-07-08T05:00:00.123456Z"), "2026-07-08 05:00:00")
         self.assertEqual(deepflow._safe_identifier("flow_log"), "flow_log")
         self.assertEqual(deepflow._safe_identifier("bad; DROP"), "flow_log")  # injection-ish → safe default
+
+
+class TopologyTests(unittest.TestCase):
+    def test_builds_owner_service_and_peer_topology(self):
+        primary = {"namespace": "aiops-temp", "name": "web-1", "uid": "u1", "pod_ip": "10.0.0.5", "node": "node1"}
+        k8s_record = {
+            "containers": ["app"],
+            "owner_chain": [{"kind": "ReplicaSet", "name": "web-abc"}, {"kind": "Deployment", "name": "web"}],
+            "services": [{"name": "web-svc", "selector": {"app": "web"}, "cluster_ip": "10.96.0.1", "ports": [{"port": 80}]}],
+        }
+        entities, edges, summary = build_topology(
+            primary=primary,
+            k8s_record=k8s_record,
+            evidence_refs_by_dimension={"k8s": ["k8s-ref"], "tracing": ["tr-ref"]},
+            deepflow_coverage="present",
+            deepflow_peers=["10.0.0.9", "10.0.0.5", "10.0.0.9"],  # self ip + dup must be skipped
+        )
+        relations = {e["relation"] for e in edges}
+        self.assertIn("owned_by", relations)   # Pod -> ReplicaSet -> Deployment
+        self.assertIn("selects", relations)    # Service -> Pod
+        self.assertIn("communicates_with", relations)  # peer IP -> Pod (weak)
+
+        self.assertEqual(sum(1 for e in edges if e["relation"] == "owned_by"), 2)
+
+        svc_edges = [e for e in edges if e["relation"] == "selects"]
+        self.assertEqual(svc_edges[0]["source"], "service:aiops-temp/web-svc")
+        self.assertEqual(svc_edges[0]["target"], "pod:aiops-temp/web-1")
+
+        peer_edges = [e for e in edges if e["relation"] == "communicates_with"]
+        self.assertEqual(len(peer_edges), 1)               # self ip + dup excluded
+        self.assertEqual(peer_edges[0]["confidence"], "weak")
+        self.assertEqual(peer_edges[0]["directness"], "related_context")
+
+        self.assertIn("Service", summary["entity_kinds"])
+        self.assertIn("Deployment", summary["entity_kinds"])
+        self.assertIn("owned_by", summary["relations"])
 
 
 if __name__ == "__main__":

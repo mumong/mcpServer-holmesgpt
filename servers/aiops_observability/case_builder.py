@@ -103,11 +103,20 @@ def _write_package(
     refs_by_dimension = _recommended_refs_by_dimension(evidence_records)
     k8s_record = next((source.records[0] for source in sources if source.dimension == "k8s" and source.records), {})
     deepflow = next((source for source in sources if source.source_system == "deepflow"), None)
+    pod_ip = primary.get("pod_ip")
+    deepflow_peers: list[str] = []
+    if deepflow and deepflow.records:
+        for row in deepflow.records:
+            for key in ("ip4_0", "ip4_1"):
+                ip = row.get(key)
+                if ip and ip != pod_ip and ip not in deepflow_peers:
+                    deepflow_peers.append(str(ip))
     entities, topology_edges, topology_summary = build_topology(
         primary=primary,
         k8s_record=k8s_record,
         evidence_refs_by_dimension=refs_by_dimension,
         deepflow_coverage=deepflow.coverage if deepflow else "absent",
+        deepflow_peers=deepflow_peers,
     )
     coverage = {source.dimension: source.coverage for source in sources}
     coverage["topology"] = "present" if topology_edges else "empty"
