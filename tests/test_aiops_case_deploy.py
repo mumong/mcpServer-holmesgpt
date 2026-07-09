@@ -1,7 +1,33 @@
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 import yaml
+
+
+class AiopsServerImportTests(unittest.TestCase):
+    """Regression: mcp-proxy launches the server from servers/ (CWD=servers),
+    but the tool logic uses `servers.aiops_observability.*` absolute imports.
+    Both entrypoints must inject the project root so import works from that CWD.
+    """
+
+    def _import_from_servers_cwd(self, module: str) -> subprocess.CompletedProcess:
+        servers_dir = Path(__file__).resolve().parents[1] / "servers"
+        return subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            capture_output=True,
+            text=True,
+            cwd=str(servers_dir),
+        )
+
+    def test_aiops_case_server_imports_from_servers_cwd(self):
+        result = self._import_from_servers_cwd("aiops_case_server")
+        self.assertEqual(result.returncode, 0, msg=result.stderr[-600:])
+
+    def test_aiops_fine_server_imports_from_servers_cwd(self):
+        result = self._import_from_servers_cwd("aiops_observability_fine_server")
+        self.assertEqual(result.returncode, 0, msg=result.stderr[-600:])
 
 
 class AiopsCaseDeployTests(unittest.TestCase):

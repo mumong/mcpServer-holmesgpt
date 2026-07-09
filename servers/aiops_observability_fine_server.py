@@ -2,7 +2,16 @@
 """AIOps fine-grained observability MCP server."""
 
 import asyncio
+import os
+import sys
 import time
+
+# Ensure the project root (parent of servers/) is importable so the shared
+# `servers.aiops_observability.*` absolute imports resolve regardless of the
+# process CWD (mcp-proxy launches this from servers/).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
