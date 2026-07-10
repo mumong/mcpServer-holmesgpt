@@ -25,7 +25,7 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
     if not ids:
         return SourceResult(
             "tempo", "trace", "empty",
-            error="无可查询的 trace_id（目标 Pod 未被 OpenTelemetry 插桩或窗口内无 trace）",
+            error="无可查询的 trace_id（未从 DeepFlow flow 或日志中发现 trace_id；可能该 Pod 未插桩，或采集窗口内无 trace 且日志未打 trace_id）",
         )
     tempo_pod = cfg.tempo_exec_pod or _kube.find_pod(cfg.tempo_exec_namespace, cfg.tempo_exec_selector)
     if not tempo_pod:

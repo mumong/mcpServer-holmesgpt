@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +100,10 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
         tid = row.get("trace_id")
         if tid and str(tid) not in discovered_trace_ids:
             discovered_trace_ids.append(str(tid))
+    # 补充：从日志内容里提取 trace_id（插桩应用会在日志里打 trace_id，即使窗口内无新 flow）
+    for tid in _trace_ids_from_evidence([k8s, logs]):
+        if tid not in discovered_trace_ids:
+            discovered_trace_ids.append(tid)
 
     tempo = collect_tempo(
         namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=12
@@ -112,6 +118,29 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
     case_dir.mkdir(parents=True, exist_ok=True)
     _write_package(case_dir, case_id, scenario, primary, window.to_dict(), sources)
     return case_summary(case_dir)
+
+
+_TRACE_ID_RE = re.compile(r'(?:trace[_-]?id["\s:=]+)([0-9a-f]{16,32})', re.IGNORECASE)
+
+
+def _trace_ids_from_evidence(sources: list[SourceResult]) -> list[str]:
+    """从日志/证据文本里提取 app 级 trace_id（插桩应用在日志打的），供 Tempo 查询。
+    插桩 Pod 即使采集窗口内无新 DeepFlow flow，其历史日志里也有 trace_id。"""
+    found: list[str] = []
+    for src in sources:
+        for ev in src.evidence:
+            blobs = [str(ev.summary or "")]
+            payload = ev.payload or {}
+            for key in ("log_preview", "records", "message"):
+                v = payload.get(key)
+                if v:
+                    blobs.append(json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v)
+            for blob in blobs:
+                for tid in _TRACE_ID_RE.findall(blob):
+                    t = tid.lower()
+                    if t not in found:
+                        found.append(t)
+    return found[:20]
 
 
 def _resolve_ip_to_pod(ip: str, timeout: int = 20) -> tuple[str, str] | None:
@@ -185,6 +214,16 @@ def _write_package(
     )
     coverage = {source.dimension: source.coverage for source in sources}
     coverage["topology"] = "present" if topology_edges else "empty"
+    # logs coverage 应反映"任意来源的真实日志"：K8s collector 采到的容器日志也标了
+    # dimension="logs"，避免 ES 空时误报 logs=empty（其实容器日志已采到）。
+    if coverage.get("logs") in (None, "empty", "absent"):
+        k8s_has_logs = any(
+            ev.dimension == "logs" and (ev.payload or {}).get("log_preview")
+            for src in sources if src.dimension == "k8s"
+            for ev in src.evidence
+        )
+        if k8s_has_logs:
+            coverage["logs"] = "present"
 
     case = {
         "case_id": case_id,
