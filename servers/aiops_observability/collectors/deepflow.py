@@ -54,6 +54,65 @@ def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: in
     )
 
 
+def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dict[str, Any] | None:
+    """Run a ClickHouse query returning JSON, via kubectl-exec or direct URL."""
+    if cfg.deepflow_clickhouse_url:
+        if requests is None:
+            return None
+        try:
+            resp = requests.post(cfg.deepflow_clickhouse_url, data=sql.encode("utf-8"), timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:  # noqa: BLE001
+            return None
+    if not cfg.clickhouse_exec_enabled:
+        return None
+    ch_pod = cfg.clickhouse_exec_pod or _kube.find_pod(cfg.clickhouse_exec_namespace, cfg.clickhouse_exec_selector)
+    if not ch_pod:
+        return None
+    ok, out, _ = _kube.exec_in_pod(cfg.clickhouse_exec_namespace, ch_pod, ["clickhouse-client", "--query", sql], timeout=timeout)
+    if not ok or not out.strip():
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+
+def discover_correlation(cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int) -> dict[str, list[str]]:
+    """Discover distinct trace_ids (for Tempo lookup) and caller IPs (who called
+    this pod = request drivers) for the target Pod IP within the window.
+
+    A dedicated DISTINCT query is used so successful traces surface even when the
+    most-recent flows are dominated by a failing trace.
+    """
+    db = _safe_identifier(database or "flow_log")
+    ip = pod_ip
+    win = (
+        f"time >= toDateTime('{_clickhouse_datetime(start)}', 'UTC') "
+        f"AND time <= toDateTime('{_clickhouse_datetime(end)}', 'UTC')"
+    )
+    trace_sql = (
+        f"SELECT DISTINCT trace_id FROM {db}.l7_flow_log "
+        f"WHERE {win} AND (ip4_0='{ip}' OR ip4_1='{ip}') AND trace_id != '' "
+        f"ORDER BY trace_id LIMIT 20 FORMAT JSON"
+    )
+    caller_sql = (
+        f"SELECT DISTINCT IPv4NumToString(ip4_0) AS caller FROM {db}.l7_flow_log "
+        f"WHERE {win} AND ip4_1='{ip}' AND ip4_0 != ip4_1 "
+        f"LIMIT 10 FORMAT JSON"
+    )
+    trace_ids: list[str] = []
+    caller_ips: list[str] = []
+    tpayload = _run_clickhouse_json(cfg, db, trace_sql, timeout)
+    if tpayload and isinstance(tpayload.get("data"), list):
+        trace_ids = [str(r.get("trace_id")) for r in tpayload["data"] if r.get("trace_id")]
+    cpayload = _run_clickhouse_json(cfg, db, caller_sql, timeout)
+    if cpayload and isinstance(cpayload.get("data"), list):
+        caller_ips = [str(r.get("caller")) for r in cpayload["data"] if r.get("caller")]
+    return {"trace_ids": trace_ids, "caller_ips": caller_ips}
+
+
 def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_ip: str, node: str | None, sql: str, database: str, source_desc: str, max_records: int) -> SourceResult:
     coverage = "present" if rows else "empty"
     evidence = []

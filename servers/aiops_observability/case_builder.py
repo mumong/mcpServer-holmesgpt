@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .collectors.deepflow import collect_deepflow
+from .collectors import _kube
+from .collectors.deepflow import collect_deepflow, discover_correlation
 from .collectors.elasticsearch import collect_elasticsearch
 from .collectors.kubernetes import collect_kubernetes
 from .collectors.prometheus import collect_prometheus
@@ -86,21 +87,73 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
         max_records=cfg.max_records,
     )
 
-    # 从 DeepFlow flow 里发现 trace_id，查 Tempo 分布式 trace（插桩 pod 才有）
-    discovered_trace_ids: list[str] = []
-    if deepflow.records:
-        for row in deepflow.records:
-            tid = row.get("trace_id")
-            if tid and tid not in discovered_trace_ids:
-                discovered_trace_ids.append(str(tid))
+    # 用专门的 DISTINCT 查询发现全量 trace_id（含成功 trace）+ caller IP（谁调用了本 Pod）
+    correlation = discover_correlation(
+        get_config(), cfg.deepflow_clickhouse_database, primary.get("pod_ip") or "",
+        window.start, window.end, cfg.timeout_seconds,
+    ) if primary.get("pod_ip") else {"trace_ids": [], "caller_ips": []}
+    discovered_trace_ids = list(correlation.get("trace_ids") or [])
+    # 补充：也从已取回的 flow 记录里收集 trace_id
+    for row in (deepflow.records or []):
+        tid = row.get("trace_id")
+        if tid and str(tid) not in discovered_trace_ids:
+            discovered_trace_ids.append(str(tid))
+
     tempo = collect_tempo(
-        namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=8
+        namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=12
     )
 
+    # request_driver：把 caller IP 解析成 pod，采它的日志（谁驱动了这次异常）
+    caller_logs = _collect_caller_logs(cfg, correlation.get("caller_ips") or [], window)
+
     sources = [k8s, metrics, logs, deepflow, tempo]
+    if caller_logs is not None:
+        sources.append(caller_logs)
     case_dir.mkdir(parents=True, exist_ok=True)
     _write_package(case_dir, case_id, scenario, primary, window.to_dict(), sources)
     return case_summary(case_dir)
+
+
+def _resolve_ip_to_pod(ip: str, timeout: int = 20) -> tuple[str, str] | None:
+    """Resolve a Pod IP to (namespace, pod_name) via kubectl (cluster-wide)."""
+    ok, out, _ = _kube.run_kubectl(
+        ["get", "pod", "-A", "--field-selector", f"status.podIP={ip}",
+         "-o", "jsonpath={.items[0].metadata.namespace}/{.items[0].metadata.name}"],
+        timeout=timeout,
+    )
+    if ok and out.strip() and "/" in out:
+        ns, name = out.strip().split("/", 1)
+        return ns, name
+    return None
+
+
+def _collect_caller_logs(cfg: Any, caller_ips: list[str], window: Any) -> SourceResult | None:
+    """request_driver: resolve the caller IP to its Pod and collect that Pod's
+    logs — the request side that drove the target Pod's failure. Best-effort;
+    returns None when no caller Pod can be resolved."""
+    for ip in caller_ips[:5]:
+        resolved = _resolve_ip_to_pod(ip, timeout=cfg.timeout_seconds)
+        if not resolved:
+            continue
+        ns, name = resolved
+        result = collect_elasticsearch(
+            elasticsearch_url=cfg.elasticsearch_url,
+            index=cfg.elasticsearch_index,
+            namespace=ns, pod=name, pod_uid=None,
+            start=window.start, end=window.end,
+            timeout=cfg.timeout_seconds, max_records=cfg.max_records,
+        )
+        if result.coverage == "present" and result.records:
+            # Retag as request_driver caller evidence.
+            result.dimension = "caller_logs"
+            for ev in result.evidence:
+                ev.dimension = "caller_logs"
+                ev.evidence_id = f"caller-log-{ns}-{name}"
+                ev.summary = f"Caller Pod {ns}/{name}（{ip}）日志：{ev.summary}"
+            result.query_meta["caller_pod"] = f"{ns}/{name}"
+            result.query_meta["caller_ip"] = ip
+            return result
+    return None
 
 
 def _write_package(
@@ -327,6 +380,14 @@ _DIMENSION_ROLE: dict[str, dict[str, str]] = {
     "logs": {
         "role": "pre_failure_behavior",
         "interpretation": "应用日志揭示失败前的进程内行为，解释异常是如何发生的。",
+    },
+    "caller_logs": {
+        "role": "request_driver",
+        "interpretation": "调用方 Pod 的日志揭示是哪些请求驱动了目标 Pod 的异常（请求侧证据）。",
+    },
+    "trace": {
+        "role": "span_evidence",
+        "interpretation": "Tempo 分布式 trace 的 span 证明请求路径真实存在，可端到端追踪。",
     },
     "tracing": {
         "role": "network_flow",
