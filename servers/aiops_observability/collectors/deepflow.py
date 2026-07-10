@@ -40,13 +40,16 @@ def _clickhouse_datetime(value: str) -> str:
 
 
 def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: int) -> str:
+    # 窗口是 UTC，但 ClickHouse 服务器时区可能是 Asia/Shanghai 等。用 toDateTime(..,'UTC')
+    # 显式按 UTC 解析，避免 8 小时偏移导致查询错过真实 flow（历史 bug）。
     return (
         "SELECT time, ip4_0, ip4_1, l7_protocol_str, request_type, request_resource, "
         "response_code, response_status, trace_id, span_id "
         f"FROM {database}.l7_flow_log "
-        f"WHERE time >= toDateTime('{_clickhouse_datetime(start)}') "
-        f"AND time <= toDateTime('{_clickhouse_datetime(end)}') "
+        f"WHERE time >= toDateTime('{_clickhouse_datetime(start)}', 'UTC') "
+        f"AND time <= toDateTime('{_clickhouse_datetime(end)}', 'UTC') "
         f"AND (ip4_0 = '{pod_ip}' OR ip4_1 = '{pod_ip}') "
+        f"ORDER BY time DESC "
         f"LIMIT {int(max_records)} FORMAT JSON"
     )
 

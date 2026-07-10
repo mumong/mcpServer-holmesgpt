@@ -38,6 +38,11 @@ class RuntimeConfig:
     clickhouse_exec_namespace: str
     clickhouse_exec_pod: str
     clickhouse_exec_selector: str
+    tempo_exec_enabled: bool
+    tempo_exec_namespace: str
+    tempo_exec_pod: str
+    tempo_exec_selector: str
+    tempo_local_url: str
 
 
 def get_config() -> RuntimeConfig:
@@ -66,6 +71,11 @@ def get_config() -> RuntimeConfig:
         clickhouse_exec_namespace=os.environ.get("AIOPS_CLICKHOUSE_EXEC_NAMESPACE", "xnet").strip() or "xnet",
         clickhouse_exec_pod=os.environ.get("AIOPS_CLICKHOUSE_EXEC_POD", "observability-clickhouse-0").strip(),
         clickhouse_exec_selector=os.environ.get("AIOPS_CLICKHOUSE_EXEC_SELECTOR", "app.kubernetes.io/name=clickhouse").strip(),
+        tempo_exec_enabled=_bool_env("AIOPS_TEMPO_EXEC_ENABLED", True),
+        tempo_exec_namespace=os.environ.get("AIOPS_TEMPO_EXEC_NAMESPACE", "xnet").strip() or "xnet",
+        tempo_exec_pod=os.environ.get("AIOPS_TEMPO_EXEC_POD", "").strip(),
+        tempo_exec_selector=os.environ.get("AIOPS_TEMPO_EXEC_SELECTOR", "app=lgtm").strip(),
+        tempo_local_url=os.environ.get("AIOPS_TEMPO_LOCAL_URL", "http://127.0.0.1:3200").strip(),
     )
 
 

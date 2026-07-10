@@ -22,6 +22,7 @@ EVIDENCE_FILES = [
     "evidence/logs.jsonl",
     "evidence/deepflow_l4.jsonl",
     "evidence/deepflow_l7.jsonl",
+    "evidence/tempo_traces.jsonl",
     "evidence/k8s_events.jsonl",
     "evidence/k8s_describe.txt",
     "evidence/k8s_pod.yaml",

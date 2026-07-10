@@ -230,6 +230,13 @@ class DeepflowCollectorTests(unittest.TestCase):
         self.assertEqual(deepflow._safe_identifier("flow_log"), "flow_log")
         self.assertEqual(deepflow._safe_identifier("bad; DROP"), "flow_log")  # injection-ish → safe default
 
+    def test_query_uses_explicit_utc_timezone(self):
+        # Regression: ClickHouse server TZ may be Asia/Shanghai; the UTC window
+        # must be parsed as UTC to avoid an 8-hour offset missing real flows.
+        sql = deepflow._build_sql("flow_log", "10.0.0.1", "2026-07-08T05:00:00Z", "2026-07-08T06:00:00Z", 10)
+        self.assertIn("toDateTime('2026-07-08 05:00:00', 'UTC')", sql)
+        self.assertIn("toDateTime('2026-07-08 06:00:00', 'UTC')", sql)
+
 
 class TopologyTests(unittest.TestCase):
     def test_builds_owner_service_and_peer_topology(self):
@@ -265,6 +272,51 @@ class TopologyTests(unittest.TestCase):
         self.assertIn("Service", summary["entity_kinds"])
         self.assertIn("Deployment", summary["entity_kinds"])
         self.assertIn("owned_by", summary["relations"])
+
+
+class SignalsAndTempoTests(unittest.TestCase):
+    def test_signals_have_role_and_interpretation(self):
+        from servers.aiops_observability.case_builder import _signals_from_sources
+        from servers.aiops_observability.schemas import EvidenceItem, SourceResult
+        k8s = SourceResult("kubernetes", "k8s", "present", evidence=[
+            EvidenceItem(evidence_id="e1", source_system="kubernetes", dimension="k8s",
+                         summary="Last terminated state: api=OOMKilled exit=137", severity="warning")])
+        logs = SourceResult("elasticsearch", "logs", "present", evidence=[
+            EvidenceItem(evidence_id="l1", source_system="elasticsearch", dimension="logs",
+                         summary="allocated business cache chunk=8 approx_mib=16")])
+        sigs = {s["dimension"]: s for s in _signals_from_sources([k8s, logs])}
+        self.assertEqual(sigs["k8s"]["role"], "root_cause_state")
+        self.assertIn("OOMKilled", sigs["k8s"]["observed"])           # human-readable real signal
+        self.assertTrue(sigs["k8s"]["interpretation"])                # plain-language why
+        self.assertEqual(sigs["logs"]["role"], "pre_failure_behavior")
+
+    def test_tracing_role_upgrades_when_trace_id_present(self):
+        from servers.aiops_observability.case_builder import _signals_from_sources
+        from servers.aiops_observability.schemas import EvidenceItem, SourceResult
+        df = SourceResult("deepflow", "tracing", "present", evidence=[
+            EvidenceItem(evidence_id="d1", source_system="deepflow", dimension="tracing",
+                         summary="DeepFlow flows", trace_correlation={"trace_ids": ["abc"]})])
+        sig = _signals_from_sources([df])[0]
+        self.assertEqual(sig["role"], "trace_correlated_traffic")
+
+    def test_tempo_empty_without_trace_ids(self):
+        import os
+        from servers.aiops_observability.collectors import tempo
+        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}):
+            r = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=[], timeout=5)
+        self.assertEqual(r.coverage, "empty")
+        self.assertIn("trace_id", r.error or "")
+
+    def test_tempo_present_when_spans_found(self):
+        import os
+        from servers.aiops_observability.collectors import tempo
+        trace_json = json.dumps({"batches": [{"scopeSpans": [{"spans": [{"name": "GET /allocate"}]}]}]})
+        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
+             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
+             patch.object(tempo._kube, "exec_in_pod", return_value=(True, trace_json, "")):
+            r = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=["t1"], timeout=5)
+        self.assertEqual(r.coverage, "present")
+        self.assertIn("span", r.evidence[0].summary.lower())
 
 
 if __name__ == "__main__":

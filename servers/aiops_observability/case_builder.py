@@ -9,6 +9,7 @@ from .collectors.deepflow import collect_deepflow
 from .collectors.elasticsearch import collect_elasticsearch
 from .collectors.kubernetes import collect_kubernetes
 from .collectors.prometheus import collect_prometheus
+from .collectors.tempo import collect_tempo
 from .config import get_config, runtime_status
 from .evidence_store import (
     EVIDENCE_FILES,
@@ -85,7 +86,18 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
         max_records=cfg.max_records,
     )
 
-    sources = [k8s, metrics, logs, deepflow]
+    # 从 DeepFlow flow 里发现 trace_id，查 Tempo 分布式 trace（插桩 pod 才有）
+    discovered_trace_ids: list[str] = []
+    if deepflow.records:
+        for row in deepflow.records:
+            tid = row.get("trace_id")
+            if tid and tid not in discovered_trace_ids:
+                discovered_trace_ids.append(str(tid))
+    tempo = collect_tempo(
+        namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=8
+    )
+
+    sources = [k8s, metrics, logs, deepflow, tempo]
     case_dir.mkdir(parents=True, exist_ok=True)
     _write_package(case_dir, case_id, scenario, primary, window.to_dict(), sources)
     return case_summary(case_dir)
@@ -139,6 +151,7 @@ def _write_package(
     write_jsonl(case_dir / "evidence" / "logs.jsonl", _records_for_dimension(evidence_records, "logs"))
     write_jsonl(case_dir / "evidence" / "deepflow_l4.jsonl", [])
     write_jsonl(case_dir / "evidence" / "deepflow_l7.jsonl", _records_for_dimension(evidence_records, "tracing"))
+    write_jsonl(case_dir / "evidence" / "tempo_traces.jsonl", _records_for_dimension(evidence_records, "trace"))
     write_jsonl(case_dir / "evidence" / "k8s_events.jsonl", _records_for_dimension(evidence_records, "k8s"))
     (case_dir / "evidence").mkdir(parents=True, exist_ok=True)
     k8s = next((source for source in sources if source.dimension == "k8s"), None)
@@ -165,7 +178,7 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
         "primary_entity": case.get("primary_entity", {}),
         "time_window": case.get("time_window", {}),
         "coverage": case.get("coverage", {}),
-        "signals_summary": [_select(item, ["signal_id", "dimension", "strength", "observed", "evidence_refs"]) for item in signals],
+        "signals_summary": [_select(item, ["signal_id", "dimension", "role", "strength", "observed", "interpretation", "source_system", "evidence_refs"]) for item in signals],
         "timeline_summary": [_select(item, ["timestamp", "dimension", "summary", "evidence_refs"]) for item in timeline],
         "topology_summary": summarize_topology(entities, topology),
         "evidence_inventory": evidence_inventory(case_dir),
@@ -301,16 +314,69 @@ def _recommended_refs_by_dimension(records: list[dict[str, Any]]) -> dict[str, l
     return refs
 
 
+# 每个维度的语义角色与解读（借鉴 data 脚本，让信号人可读、直接指向问题）
+_DIMENSION_ROLE: dict[str, dict[str, str]] = {
+    "k8s": {
+        "role": "root_cause_state",
+        "interpretation": "Kubernetes 终态与事件是根因状态的直接证据（如 OOMKilled/exit137、FailedScheduling）。",
+    },
+    "metrics": {
+        "role": "resource_trend",
+        "interpretation": "Prometheus 指标反映资源使用趋势，用于判断是否逼近/超过 limit。",
+    },
+    "logs": {
+        "role": "pre_failure_behavior",
+        "interpretation": "应用日志揭示失败前的进程内行为，解释异常是如何发生的。",
+    },
+    "tracing": {
+        "role": "network_flow",
+        "interpretation": "DeepFlow L7 流量：带 trace_id 时是 trace 关联的调用链强证据；仅 IP 级时是弱网络背景。",
+    },
+}
+
+_STRENGTH_BY_COVERAGE = {
+    "present": "strong",
+    "weak": "weak",
+    "empty": "empty",
+    "absent": "absent",
+    "error": "error",
+}
+
+
+def _best_observed(source: SourceResult) -> str:
+    """挑一条人可读的真实原文作为 observed；无数据时给诚实缺失原因。"""
+    if source.evidence:
+        # 优先带 severity=warning 的证据（更可能指向问题），否则第一条
+        warn = next((e for e in source.evidence if getattr(e, "severity", "") == "warning"), None)
+        chosen = warn or source.evidence[0]
+        return str(chosen.summary)
+    if source.error:
+        return f"未采集到真实数据：{source.error}"
+    return f"{source.source_system} coverage={source.coverage}（无记录）"
+
+
 def _signals_from_sources(sources: list[SourceResult]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source in sources:
         refs = [item.evidence_id for item in source.evidence]
+        role_info = _DIMENSION_ROLE.get(source.dimension, {"role": source.dimension, "interpretation": ""})
+        # tracing 带 trace_id 时升级为 trace 关联角色
+        role = role_info["role"]
+        if source.dimension == "tracing" and source.coverage == "present":
+            has_trace = any(
+                (e.trace_correlation or {}).get("trace_ids") for e in source.evidence if e.trace_correlation
+            )
+            if has_trace:
+                role = "trace_correlated_traffic"
         rows.append(
             {
-                "signal_id": f"{source.dimension}-{source.coverage}",
+                "signal_id": f"sig-{source.dimension}-{source.coverage}",
                 "dimension": source.dimension,
-                "strength": "strong" if source.coverage == "present" else source.coverage,
-                "observed": source.error or f"{source.source_system} coverage={source.coverage} records={len(source.records)}",
+                "role": role,
+                "observed": _best_observed(source),
+                "interpretation": role_info["interpretation"],
+                "strength": _STRENGTH_BY_COVERAGE.get(source.coverage, source.coverage),
+                "source_system": source.source_system,
                 "evidence_refs": refs[:8],
             }
         )

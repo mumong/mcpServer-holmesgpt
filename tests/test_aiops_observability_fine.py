@@ -76,7 +76,8 @@ class AiopsFineToolTests(unittest.TestCase):
 
         self.assertEqual(result.coverage, "empty")
         self.assertIn("FROM flow_log.l7_flow_log", captured["sql"])
-        self.assertIn("toDateTime('2026-07-08 05:00:00')", captured["sql"])
+        # timezone-explicit UTC parsing (fix for Asia/Shanghai server TZ offset)
+        self.assertIn("toDateTime('2026-07-08 05:00:00', 'UTC')", captured["sql"])
         self.assertNotIn("l4_protocol", captured["sql"])
 
 
