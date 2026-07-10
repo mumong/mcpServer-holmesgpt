@@ -230,6 +230,26 @@ class DeepflowCollectorTests(unittest.TestCase):
         self.assertEqual(deepflow._safe_identifier("flow_log"), "flow_log")
         self.assertEqual(deepflow._safe_identifier("bad; DROP"), "flow_log")  # injection-ish → safe default
 
+    def test_build_call_chains_stitches_by_syscall_trace_id(self):
+        # eBPF auto-tracing: flows sharing a syscall_trace_id form a call chain
+        # WITHOUT app instrumentation.
+        rows = [
+            {"time": "t1", "src_ip": "10.0.0.1", "dst_ip": "10.0.0.2", "l7_protocol_str": "HTTP",
+             "request_resource": "/api", "response_code": 200, "response_duration": 5,
+             "syscall_trace_id_request": "999", "trace_id": ""},
+            {"time": "t2", "src_ip": "10.0.0.2", "dst_ip": "10.0.0.3", "l7_protocol_str": "MySQL",
+             "request_resource": "SELECT 1", "response_code": None, "response_duration": 3,
+             "syscall_trace_id_request": "999", "trace_id": ""},
+            {"time": "t3", "src_ip": "10.0.0.9", "dst_ip": "10.0.0.2", "l7_protocol_str": "HTTP",
+             "request_resource": "/other", "response_code": 200, "response_duration": 1,
+             "syscall_trace_id_request": "111", "trace_id": ""},
+        ]
+        chains = deepflow._build_call_chains(rows)
+        self.assertEqual(len(chains), 1)  # only syscall 999 has 2 hops
+        self.assertEqual(chains[0]["syscall_trace_id"], "999")
+        self.assertEqual(chains[0]["hop_count"], 2)
+        self.assertEqual(chains[0]["hops"][0]["proto"], "HTTP")
+
     def test_query_uses_explicit_utc_timezone(self):
         # Regression: ClickHouse server TZ may be Asia/Shanghai; the UTC window
         # must be parsed as UTC to avoid an 8-hour offset missing real flows.

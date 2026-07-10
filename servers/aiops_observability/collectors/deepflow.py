@@ -42,9 +42,13 @@ def _clickhouse_datetime(value: str) -> str:
 def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: int) -> str:
     # 窗口是 UTC，但 ClickHouse 服务器时区可能是 Asia/Shanghai 等。用 toDateTime(..,'UTC')
     # 显式按 UTC 解析，避免 8 小时偏移导致查询错过真实 flow（历史 bug）。
+    # 额外取 DeepFlow eBPF 自动追踪字段：syscall_trace_id/tcp_seq 无需 app 插桩即可拼调用链，
+    # response_duration 给真实延迟。UInt64 用 toString 避免 JSON 精度丢失。
     return (
-        "SELECT time, ip4_0, ip4_1, l7_protocol_str, request_type, request_resource, "
-        "response_code, response_status, trace_id, span_id "
+        "SELECT time, IPv4NumToString(ip4_0) AS src_ip, IPv4NumToString(ip4_1) AS dst_ip, "
+        "l7_protocol_str, request_type, request_resource, response_code, response_status, response_duration, "
+        "trace_id, span_id, toString(syscall_trace_id_request) AS syscall_trace_id_request, "
+        "toString(syscall_trace_id_response) AS syscall_trace_id_response "
         f"FROM {database}.l7_flow_log "
         f"WHERE time >= toDateTime('{_clickhouse_datetime(start)}', 'UTC') "
         f"AND time <= toDateTime('{_clickhouse_datetime(end)}', 'UTC') "
@@ -52,6 +56,39 @@ def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: in
         f"ORDER BY time DESC "
         f"LIMIT {int(max_records)} FORMAT JSON"
     )
+
+
+def _build_call_chains(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """用 eBPF syscall_trace_id 把同一次请求的多跳拼成调用链（无需 app 插桩）。"""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        stid = r.get("syscall_trace_id_request") or r.get("syscall_trace_id_response") or "0"
+        if stid and stid != "0":
+            groups.setdefault(stid, []).append(r)
+    chains: list[dict[str, Any]] = []
+    for stid, hops in groups.items():
+        if len(hops) < 2:
+            continue  # 单跳不算链
+        ordered = sorted(hops, key=lambda x: str(x.get("time") or ""))
+        chains.append(
+            {
+                "syscall_trace_id": stid,
+                "hop_count": len(ordered),
+                "hops": [
+                    {
+                        "src": h.get("src_ip"),
+                        "dst": h.get("dst_ip"),
+                        "proto": h.get("l7_protocol_str"),
+                        "endpoint": str(h.get("request_resource") or "")[:120],
+                        "code": h.get("response_code"),
+                        "duration_us": h.get("response_duration"),
+                    }
+                    for h in ordered[:8]
+                ],
+            }
+        )
+    chains.sort(key=lambda c: -c["hop_count"])
+    return chains[:5]
 
 
 def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dict[str, Any] | None:
@@ -77,6 +114,49 @@ def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dic
         return json.loads(out)
     except json.JSONDecodeError:
         return None
+
+
+def fetch_call_chains(cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int, max_chains: int = 5) -> list[dict[str, Any]]:
+    """定向抓该 Pod 的 eBPF 多跳调用链（syscall_trace_id 关联，无需 app 插桩）。
+    先找出有 >=2 跳的 syscall_trace_id，再取回它们的完整链路。"""
+    db = _safe_identifier(database or "flow_log")
+    win = (
+        f"time >= toDateTime('{_clickhouse_datetime(start)}', 'UTC') "
+        f"AND time <= toDateTime('{_clickhouse_datetime(end)}', 'UTC')"
+    )
+    top_sql = (
+        f"SELECT toString(syscall_trace_id_request) AS stid, count() AS hops FROM {db}.l7_flow_log "
+        f"WHERE {win} AND (ip4_0='{pod_ip}' OR ip4_1='{pod_ip}') AND syscall_trace_id_request!=0 "
+        f"GROUP BY syscall_trace_id_request HAVING hops>=2 ORDER BY hops DESC LIMIT {int(max_chains)} FORMAT JSON"
+    )
+    payload = _run_clickhouse_json(cfg, db, top_sql, timeout)
+    stids = [str(r.get("stid")) for r in (payload.get("data") or []) if r.get("stid")] if payload else []
+    if not stids:
+        return []
+    in_list = ",".join(stids)
+    hop_sql = (
+        f"SELECT toString(time) AS time, IPv4NumToString(ip4_0) AS src, IPv4NumToString(ip4_1) AS dst, "
+        f"l7_protocol_str AS proto, request_resource AS endpoint, response_code AS code, response_duration AS dur, "
+        f"toString(syscall_trace_id_request) AS stid FROM {db}.l7_flow_log "
+        f"WHERE {win} AND syscall_trace_id_request IN ({in_list}) ORDER BY time LIMIT 200 FORMAT JSON"
+    )
+    hp = _run_clickhouse_json(cfg, db, hop_sql, timeout)
+    by_stid: dict[str, list[dict[str, Any]]] = {}
+    for r in (hp.get("data") or []) if hp else []:
+        by_stid.setdefault(str(r.get("stid")), []).append(r)
+    chains = []
+    for stid, hops in by_stid.items():
+        chains.append({
+            "syscall_trace_id": stid,
+            "hop_count": len(hops),
+            "hops": [
+                {"src": h.get("src"), "dst": h.get("dst"), "proto": h.get("proto"),
+                 "endpoint": str(h.get("endpoint") or "")[:120], "code": h.get("code"), "duration_us": h.get("dur")}
+                for h in hops[:8]
+            ],
+        })
+    chains.sort(key=lambda c: -c["hop_count"])
+    return chains[:max_chains]
 
 
 def discover_correlation(cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int) -> dict[str, list[str]]:
@@ -113,22 +193,45 @@ def discover_correlation(cfg: Any, database: str, pod_ip: str, start: str, end: 
     return {"trace_ids": trace_ids, "caller_ips": caller_ips}
 
 
-def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_ip: str, node: str | None, sql: str, database: str, source_desc: str, max_records: int) -> SourceResult:
+def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_ip: str, node: str | None, sql: str, database: str, source_desc: str, max_records: int, _fetched_chains: list[dict[str, Any]] | None = None) -> SourceResult:
     coverage = "present" if rows else "empty"
     evidence = []
     if rows:
+        app_trace_ids = [r.get("trace_id") for r in rows if r.get("trace_id")]
+        # 优先用定向查询抓到的多跳链（更可靠），否则从已取回 flow 现拼
+        call_chains = _fetched_chains if _fetched_chains else _build_call_chains(rows)
+        has_syscall = any((r.get("syscall_trace_id_request") or "0") != "0" for r in rows)
+        # 主证据：L7 flow（真实 endpoint/延迟）
         evidence.append(
             EvidenceItem(
                 evidence_id=evidence_id("deepflow", namespace, pod, "pod-ip-flow"),
                 source_system="deepflow",
                 dimension="tracing",
-                summary=f"DeepFlow 返回 {len(rows)} 条该 Pod IP 的 L7 flow 记录（来源：{source_desc}）",
+                summary=f"DeepFlow 返回 {len(rows)} 条该 Pod 的 L7 flow（真实 endpoint/协议/延迟，来源：{source_desc}）",
                 confidence="medium",
                 directness="direct",
-                trace_correlation={"pod_ip": pod_ip, "trace_ids": [r.get("trace_id") for r in rows if r.get("trace_id")][:5]},
+                trace_correlation={"pod_ip": pod_ip, "trace_ids": app_trace_ids[:5]},
                 payload={"records": rows[:10], "source": source_desc},
             )
         )
+        # eBPF 自动追踪调用链（无需 app 插桩，任意 pod 可得）
+        if call_chains:
+            top = call_chains[0]
+            hop_desc = " → ".join(
+                f"{h['src']}→{h['dst']} {h['proto']} {h['endpoint'][:40]}" for h in top["hops"][:3]
+            )
+            evidence.append(
+                EvidenceItem(
+                    evidence_id=evidence_id("deepflow", namespace, pod, "auto-call-chain"),
+                    source_system="deepflow",
+                    dimension="tracing",
+                    summary=f"eBPF 自动追踪拼出 {len(call_chains)} 条调用链（无需 app 插桩）；最长链 {top['hop_count']} 跳：{hop_desc}",
+                    confidence="high" if has_syscall else "medium",
+                    directness="direct",
+                    trace_correlation={"auto_traced": True, "call_chains": call_chains, "app_trace_ids": app_trace_ids[:5]},
+                    payload={"call_chains": call_chains},
+                )
+            )
     return SourceResult(
         "deepflow",
         "tracing",
@@ -167,7 +270,8 @@ def _collect_via_exec(cfg: Any, database: str, namespace: str, pod: str, pod_ip:
         )
     rows = payload.get("data") if isinstance(payload, dict) else []
     rows = rows if isinstance(rows, list) else []
-    return _result_from_rows(rows, namespace, pod, pod_ip, node, sql, database, f"kubectl exec {ch_pod}", max_records)
+    chains = fetch_call_chains(cfg, database, pod_ip, start, end, timeout) if rows else []
+    return _result_from_rows(rows, namespace, pod, pod_ip, node, sql, database, f"kubectl exec {ch_pod}", max_records, chains)
 
 
 def _collect_via_http(clickhouse_url: str, database: str, namespace: str, pod: str, pod_ip: str, node: str | None, start: str, end: str, timeout: int, max_records: int) -> SourceResult:
@@ -186,7 +290,8 @@ def _collect_via_http(clickhouse_url: str, database: str, namespace: str, pod: s
         )
     rows = payload.get("data") if isinstance(payload, dict) else []
     rows = rows if isinstance(rows, list) else []
-    return _result_from_rows(rows, namespace, pod, pod_ip, node, sql, database, "direct clickhouse http", max_records)
+    chains = fetch_call_chains(get_config(), database, pod_ip, start, end, timeout) if rows else []
+    return _result_from_rows(rows, namespace, pod, pod_ip, node, sql, database, "direct clickhouse http", max_records, chains)
 
 
 def collect_deepflow(
