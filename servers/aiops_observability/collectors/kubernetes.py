@@ -159,6 +159,8 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
             "containers": [c.get("name") for c in spec.get("containers") or [] if c.get("name")],
             "container_statuses": container_statuses,
             "last_terminated": last_terminated,
+            "creation_timestamp": meta.get("creationTimestamp"),
+            "start_time": status.get("startTime"),
             "deletion_timestamp": meta.get("deletionTimestamp"),
             "finalizers": meta.get("finalizers") or [],
             "owner_chain": owner_chain,
@@ -250,4 +252,3 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
             "previous_logs": prev_logs,
         },
     )
-

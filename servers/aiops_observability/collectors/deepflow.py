@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..config import get_config
 from ..schemas import EvidenceItem, SourceResult, evidence_id
@@ -45,7 +47,8 @@ def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: in
     # 额外取 DeepFlow eBPF 自动追踪字段：syscall_trace_id/tcp_seq 无需 app 插桩即可拼调用链，
     # response_duration 给真实延迟。UInt64 用 toString 避免 JSON 精度丢失。
     return (
-        "SELECT time, IPv4NumToString(ip4_0) AS src_ip, IPv4NumToString(ip4_1) AS dst_ip, "
+        "SELECT formatDateTime(toTimeZone(time, 'UTC'), '%Y-%m-%dT%H:%i:%SZ') AS timestamp, "
+        "IPv4NumToString(ip4_0) AS src_ip, IPv4NumToString(ip4_1) AS dst_ip, "
         "l7_protocol_str, request_type, request_resource, response_code, response_status, response_duration, "
         "trace_id, span_id, toString(syscall_trace_id_request) AS syscall_trace_id_request, "
         "toString(syscall_trace_id_response) AS syscall_trace_id_response "
@@ -53,7 +56,8 @@ def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: in
         f"WHERE time >= toDateTime('{_clickhouse_datetime(start)}', 'UTC') "
         f"AND time <= toDateTime('{_clickhouse_datetime(end)}', 'UTC') "
         f"AND (ip4_0 = '{pod_ip}' OR ip4_1 = '{pod_ip}') "
-        f"ORDER BY time DESC "
+        f"ORDER BY (trace_id != '') DESC, (ip4_1 = '{pod_ip}') DESC, "
+        f"(l7_protocol_str != 'DNS') DESC, time DESC "
         f"LIMIT {int(max_records)} FORMAT JSON"
     )
 
@@ -69,7 +73,10 @@ def _build_call_chains(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for stid, hops in groups.items():
         if len(hops) < 2:
             continue  # 单跳不算链
-        ordered = sorted(hops, key=lambda x: str(x.get("time") or ""))
+        ordered = sorted(
+            hops,
+            key=lambda x: str(x.get("timestamp") or x.get("time") or ""),
+        )
         chains.append(
             {
                 "syscall_trace_id": stid,
@@ -89,6 +96,67 @@ def _build_call_chains(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
     chains.sort(key=lambda c: -c["hop_count"])
     return chains[:5]
+
+
+def _flow_samples(
+    rows: list[dict[str, Any]],
+    max_samples: int = 5,
+    *,
+    source_timezone: str | None = None,
+) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            not bool(str(row.get("trace_id") or "").strip()),
+            str(row.get("l7_protocol_str") or row.get("l7_protocol") or "").upper() == "DNS",
+            str(row.get("l7_protocol_str") or row.get("l7_protocol") or "").upper() != "HTTP",
+        ),
+    )
+    for row in ranked[:max_samples]:
+        request_type = str(row.get("request_type") or "").strip()
+        resource = str(row.get("request_resource") or "").strip()
+        request = " ".join(part for part in (request_type, resource) if part)
+        samples.append(
+            {
+                "timestamp": _utc_timestamp(
+                    row.get("timestamp") or row.get("time"),
+                    source_timezone=source_timezone,
+                ),
+                "src": row.get("src_ip") or row.get("ip4_0"),
+                "dst": row.get("dst_ip") or row.get("ip4_1"),
+                "protocol": row.get("l7_protocol_str") or row.get("l7_protocol"),
+                "request": request,
+                "response_code": row.get("response_code"),
+                "duration_us": row.get("response_duration") or row.get("duration_us"),
+                "trace_id": row.get("trace_id") or "",
+                "span_id": row.get("span_id") or "",
+            }
+        )
+    return samples
+
+
+def _utc_timestamp(
+    value: Any,
+    *,
+    source_timezone: str | None = None,
+) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        if not source_timezone:
+            return None
+        try:
+            parsed = parsed.replace(tzinfo=ZoneInfo(source_timezone))
+        except ZoneInfoNotFoundError:
+            return None
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dict[str, Any] | None:
@@ -135,7 +203,8 @@ def fetch_call_chains(cfg: Any, database: str, pod_ip: str, start: str, end: str
         return []
     in_list = ",".join(stids)
     hop_sql = (
-        f"SELECT toString(time) AS time, IPv4NumToString(ip4_0) AS src, IPv4NumToString(ip4_1) AS dst, "
+        f"SELECT formatDateTime(toTimeZone(time, 'UTC'), '%Y-%m-%dT%H:%i:%SZ') AS time, "
+        f"IPv4NumToString(ip4_0) AS src, IPv4NumToString(ip4_1) AS dst, "
         f"l7_protocol_str AS proto, request_resource AS endpoint, response_code AS code, response_duration AS dur, "
         f"toString(syscall_trace_id_request) AS stid FROM {db}.l7_flow_log "
         f"WHERE {win} AND syscall_trace_id_request IN ({in_list}) ORDER BY time LIMIT 200 FORMAT JSON"
@@ -193,7 +262,20 @@ def discover_correlation(cfg: Any, database: str, pod_ip: str, start: str, end: 
     return {"trace_ids": trace_ids, "caller_ips": caller_ips}
 
 
-def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_ip: str, node: str | None, sql: str, database: str, source_desc: str, max_records: int, _fetched_chains: list[dict[str, Any]] | None = None) -> SourceResult:
+def _result_from_rows(
+    rows: list[dict[str, Any]],
+    namespace: str,
+    pod: str,
+    pod_ip: str,
+    node: str | None,
+    sql: str,
+    database: str,
+    source_desc: str,
+    max_records: int,
+    _fetched_chains: list[dict[str, Any]] | None = None,
+    *,
+    source_timezone: str | None = None,
+) -> SourceResult:
     coverage = "present" if rows else "empty"
     evidence = []
     if rows:
@@ -211,7 +293,14 @@ def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_
                 confidence="medium",
                 directness="direct",
                 trace_correlation={"pod_ip": pod_ip, "trace_ids": app_trace_ids[:5]},
-                payload={"records": rows[:10], "source": source_desc},
+                payload={
+                    "records": rows[:10],
+                    "samples": _flow_samples(
+                        rows,
+                        source_timezone=source_timezone,
+                    ),
+                    "source": source_desc,
+                },
             )
         )
         # eBPF 自动追踪调用链（无需 app 插桩，任意 pod 可得）
@@ -238,7 +327,14 @@ def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_
         coverage,
         records=rows[:max_records],
         evidence=evidence,
-        query_meta={"sql": sql, "pod_ip": pod_ip, "node": node, "database": database, "source": source_desc},
+        query_meta={
+            "sql": sql,
+            "pod_ip": pod_ip,
+            "node": node,
+            "database": database,
+            "source": source_desc,
+            "timestamp_timezone": "UTC",
+        },
         truncated=len(rows) > max_records,
     )
 

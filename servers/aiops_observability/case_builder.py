@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +25,15 @@ from .evidence_store import (
     write_jsonl,
     write_yaml,
 )
-from .schemas import EvidenceItem, SourceResult, parse_time_window
-from .topology import build_topology, summarize_topology
+from .fact_ledger import build_fact_ledger
+from .schemas import EvidenceItem, SourceResult, TimeWindow, parse_time_window
+from .topology import (
+    build_topology,
+    pod_entity_id,
+    scope_primary_topology_edge,
+    summarize_topology,
+    topology_details,
+)
 
 
 def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -56,61 +64,71 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
         "uid": k8s_record.get("uid"),
         "node": k8s_record.get("node"),
         "pod_ip": k8s_record.get("pod_ip"),
+        "creation_timestamp": k8s_record.get("creation_timestamp"),
+        "deletion_timestamp": k8s_record.get("deletion_timestamp"),
     }
+    window = _clip_window_to_pod_lifetime(window, k8s_record)
 
-    metrics = collect_prometheus(
-        prometheus_url=cfg.prometheus_url,
-        namespace=namespace,
-        pod=pod,
-        pod_uid=primary.get("uid"),
-        timeout=cfg.timeout_seconds,
-    )
-    logs = collect_elasticsearch(
-        elasticsearch_url=cfg.elasticsearch_url,
-        index=cfg.elasticsearch_index,
-        namespace=namespace,
-        pod=pod,
-        pod_uid=primary.get("uid"),
-        start=window.start,
-        end=window.end,
-        timeout=cfg.timeout_seconds,
-        max_records=cfg.max_records,
-    )
-    deepflow = collect_deepflow(
-        clickhouse_url=cfg.deepflow_clickhouse_url,
-        clickhouse_database=cfg.deepflow_clickhouse_database,
-        namespace=namespace,
-        pod=pod,
-        pod_ip=primary.get("pod_ip"),
-        node=primary.get("node"),
-        start=window.start,
-        end=window.end,
-        timeout=cfg.timeout_seconds,
-        max_records=cfg.max_records,
-    )
+    if window.empty:
+        reason = "requested window does not overlap the current Pod lifetime"
+        metrics = SourceResult("prometheus", "metrics", "empty", error=reason)
+        logs = SourceResult("elasticsearch", "logs", "empty", error=reason)
+        deepflow = SourceResult("deepflow", "tracing", "empty", error=reason)
+        tempo = SourceResult("tempo", "trace", "empty", error=reason)
+        caller_logs = None
+    else:
+        metrics = collect_prometheus(
+            prometheus_url=cfg.prometheus_url,
+            namespace=namespace,
+            pod=pod,
+            pod_uid=primary.get("uid"),
+            timeout=cfg.timeout_seconds,
+            start=window.start,
+            end=window.end,
+        )
+        logs = collect_elasticsearch(
+            elasticsearch_url=cfg.elasticsearch_url,
+            index=cfg.elasticsearch_index,
+            namespace=namespace,
+            pod=pod,
+            pod_uid=primary.get("uid"),
+            start=window.start,
+            end=window.end,
+            timeout=cfg.timeout_seconds,
+            max_records=cfg.max_records,
+        )
+        deepflow = collect_deepflow(
+            clickhouse_url=cfg.deepflow_clickhouse_url,
+            clickhouse_database=cfg.deepflow_clickhouse_database,
+            namespace=namespace,
+            pod=pod,
+            pod_ip=primary.get("pod_ip"),
+            node=primary.get("node"),
+            start=window.start,
+            end=window.end,
+            timeout=cfg.timeout_seconds,
+            max_records=cfg.max_records,
+        )
 
-    # 用专门的 DISTINCT 查询发现全量 trace_id（含成功 trace）+ caller IP（谁调用了本 Pod）
-    correlation = discover_correlation(
-        get_config(), cfg.deepflow_clickhouse_database, primary.get("pod_ip") or "",
-        window.start, window.end, cfg.timeout_seconds,
-    ) if primary.get("pod_ip") else {"trace_ids": [], "caller_ips": []}
-    discovered_trace_ids = list(correlation.get("trace_ids") or [])
-    # 补充：也从已取回的 flow 记录里收集 trace_id
-    for row in (deepflow.records or []):
-        tid = row.get("trace_id")
-        if tid and str(tid) not in discovered_trace_ids:
-            discovered_trace_ids.append(str(tid))
-    # 补充：从日志内容里提取 trace_id（插桩应用会在日志里打 trace_id，即使窗口内无新 flow）
-    for tid in _trace_ids_from_evidence([k8s, logs]):
-        if tid not in discovered_trace_ids:
-            discovered_trace_ids.append(tid)
+        correlation = discover_correlation(
+            get_config(), cfg.deepflow_clickhouse_database, primary.get("pod_ip") or "",
+            window.start, window.end, cfg.timeout_seconds,
+        ) if primary.get("pod_ip") else {"trace_ids": [], "caller_ips": []}
+        flow_trace_ids = [
+            str(row.get("trace_id"))
+            for row in (deepflow.records or [])
+            if row.get("trace_id")
+        ]
+        discovered_trace_ids = _merge_trace_ids(
+            flow_trace_ids,
+            list(correlation.get("trace_ids") or []),
+            _trace_ids_from_evidence([k8s, logs]),
+        )
 
-    tempo = collect_tempo(
-        namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=12
-    )
-
-    # request_driver：把 caller IP 解析成 pod，采它的日志（谁驱动了这次异常）
-    caller_logs = _collect_caller_logs(cfg, correlation.get("caller_ips") or [], window)
+        tempo = collect_tempo(
+            namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=12
+        )
+        caller_logs = _collect_caller_logs(cfg, correlation.get("caller_ips") or [], window)
 
     sources = [k8s, metrics, logs, deepflow, tempo]
     if caller_logs is not None:
@@ -121,6 +139,79 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 _TRACE_ID_RE = re.compile(r'(?:trace[_-]?id["\s:=]+)([0-9a-f]{16,32})', re.IGNORECASE)
+_ALLOCATED_MIB_RE = re.compile(r'allocated_mib["\s:=]+(\d+)', re.IGNORECASE)
+
+
+def _clip_window_to_pod_lifetime(window: TimeWindow, k8s_record: dict[str, Any]) -> TimeWindow:
+    start = _parse_iso_time(window.start)
+    end = _parse_iso_time(window.end)
+    creation = _parse_iso_time(str(k8s_record.get("creation_timestamp") or ""))
+    deletion = _parse_iso_time(str(k8s_record.get("deletion_timestamp") or ""))
+    if start is None or end is None:
+        return window
+    clipped_start = max(value for value in (start, creation) if value is not None)
+    clipped_end = min(value for value in (end, deletion) if value is not None)
+    return TimeWindow(
+        start=_iso_time(clipped_start),
+        end=_iso_time(clipped_end),
+        timezone=window.timezone,
+        empty=clipped_start > clipped_end,
+    )
+
+
+def _parse_iso_time(value: str) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _iso_time(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _merge_trace_ids(*groups: list[str], limit: int = 20) -> list[str]:
+    normalized_groups = [
+        [
+            trace_id
+            for trace_id in dict.fromkeys(
+                str(value or "").strip()
+                for value in group
+            )
+            if trace_id
+        ]
+        for group in groups
+    ]
+    merged: list[str] = []
+    for index, group in enumerate(normalized_groups):
+        remaining_groups = sum(
+            1
+            for later in normalized_groups[index + 1:]
+            if any(value not in merged for value in later)
+        )
+        current_budget = max(0, limit - len(merged) - remaining_groups)
+        for value in group:
+            if len(merged) >= limit or current_budget <= 0:
+                break
+            if value not in merged:
+                merged.append(value)
+                current_budget -= 1
+    if len(merged) < limit:
+        for group in normalized_groups:
+            for value in group:
+                if value not in merged:
+                    merged.append(value)
+                    if len(merged) >= limit:
+                        return merged
+    return merged
 
 
 def _trace_ids_from_evidence(sources: list[SourceResult]) -> list[str]:
@@ -143,16 +234,37 @@ def _trace_ids_from_evidence(sources: list[SourceResult]) -> list[str]:
     return found[:20]
 
 
-def _resolve_ip_to_pod(ip: str, timeout: int = 20) -> tuple[str, str] | None:
-    """Resolve a Pod IP to (namespace, pod_name) via kubectl (cluster-wide)."""
+def _resolve_ip_to_pod(ip: str, timeout: int = 20) -> dict[str, Any] | None:
+    """Resolve a Pod IP to UID-scoped lifecycle metadata via Kubernetes."""
     ok, out, _ = _kube.run_kubectl(
         ["get", "pod", "-A", "--field-selector", f"status.podIP={ip}",
-         "-o", "jsonpath={.items[0].metadata.namespace}/{.items[0].metadata.name}"],
+         "-o", "json"],
         timeout=timeout,
     )
-    if ok and out.strip() and "/" in out:
-        ns, name = out.strip().split("/", 1)
-        return ns, name
+    if not ok or not out.strip():
+        return None
+    try:
+        items = json.loads(out).get("items") or []
+    except (AttributeError, json.JSONDecodeError):
+        return None
+    for item in items:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        bound_ip = str(status.get("podIP") or "")
+        if bound_ip != ip:
+            continue
+        namespace = str(metadata.get("namespace") or "")
+        name = str(metadata.get("name") or "")
+        uid = str(metadata.get("uid") or "")
+        if namespace and name and uid:
+            return {
+                "namespace": namespace,
+                "pod": name,
+                "uid": uid,
+                "pod_ip": bound_ip,
+                "creation_timestamp": metadata.get("creationTimestamp"),
+                "deletion_timestamp": metadata.get("deletionTimestamp"),
+            }
     return None
 
 
@@ -164,12 +276,23 @@ def _collect_caller_logs(cfg: Any, caller_ips: list[str], window: Any) -> Source
         resolved = _resolve_ip_to_pod(ip, timeout=cfg.timeout_seconds)
         if not resolved:
             continue
-        ns, name = resolved
+        ns = str(resolved.get("namespace") or "")
+        name = str(resolved.get("pod") or "")
+        uid = str(resolved.get("uid") or "")
+        caller_window = _clip_window_to_pod_lifetime(
+            window,
+            {
+                "creation_timestamp": resolved.get("creation_timestamp"),
+                "deletion_timestamp": resolved.get("deletion_timestamp"),
+            },
+        )
+        if not ns or not name or not uid or caller_window.empty:
+            continue
         result = collect_elasticsearch(
             elasticsearch_url=cfg.elasticsearch_url,
             index=cfg.elasticsearch_index,
-            namespace=ns, pod=name, pod_uid=None,
-            start=window.start, end=window.end,
+            namespace=ns, pod=name, pod_uid=uid,
+            start=caller_window.start, end=caller_window.end,
             timeout=cfg.timeout_seconds, max_records=cfg.max_records,
         )
         if result.coverage == "present" and result.records:
@@ -181,6 +304,13 @@ def _collect_caller_logs(cfg: Any, caller_ips: list[str], window: Any) -> Source
                 ev.summary = f"Caller Pod {ns}/{name}（{ip}）日志：{ev.summary}"
             result.query_meta["caller_pod"] = f"{ns}/{name}"
             result.query_meta["caller_ip"] = ip
+            result.query_meta["caller_uid"] = uid
+            result.query_meta["caller_pod_ip"] = resolved.get("pod_ip")
+            result.query_meta["caller_creation_timestamp"] = resolved.get("creation_timestamp")
+            result.query_meta["caller_deletion_timestamp"] = resolved.get("deletion_timestamp")
+            result.query_meta["proof_start"] = caller_window.start
+            result.query_meta["proof_end"] = caller_window.end
+            result.query_meta["identity_verified"] = resolved.get("pod_ip") == ip
             return result
     return None
 
@@ -198,22 +328,34 @@ def _write_package(
     k8s_record = next((source.records[0] for source in sources if source.dimension == "k8s" and source.records), {})
     deepflow = next((source for source in sources if source.source_system == "deepflow"), None)
     pod_ip = primary.get("pod_ip")
-    deepflow_peers: list[str] = []
-    if deepflow and deepflow.records:
-        for row in deepflow.records:
-            for key in ("ip4_0", "ip4_1"):
-                ip = row.get(key)
-                if ip and ip != pod_ip and ip not in deepflow_peers:
-                    deepflow_peers.append(str(ip))
-    entities, topology_edges, topology_summary = build_topology(
-        primary=primary,
-        k8s_record=k8s_record,
-        evidence_refs_by_dimension=refs_by_dimension,
-        deepflow_coverage=deepflow.coverage if deepflow else "absent",
-        deepflow_peers=deepflow_peers,
+    deepflow_peers = _deepflow_peer_ips(
+        deepflow.records if deepflow else [],
+        pod_ip=str(pod_ip or ""),
     )
+    resolved_callers: list[dict[str, Any]] = []
+    for source in sources:
+        if source.dimension != "caller_logs":
+            continue
+        caller_pod = str(source.query_meta.get("caller_pod") or "")
+        caller_ip = str(source.query_meta.get("caller_ip") or "")
+        if "/" not in caller_pod:
+            continue
+        caller_namespace, caller_name = caller_pod.split("/", 1)
+        resolved_callers.append(
+            {
+                "namespace": caller_namespace,
+                "pod": caller_name,
+                "uid": source.query_meta.get("caller_uid"),
+                "caller_ip": caller_ip,
+                "pod_ip": source.query_meta.get("caller_pod_ip"),
+                "creation_timestamp": source.query_meta.get("caller_creation_timestamp"),
+                "deletion_timestamp": source.query_meta.get("caller_deletion_timestamp"),
+                "proof_start": source.query_meta.get("proof_start"),
+                "proof_end": source.query_meta.get("proof_end"),
+                "identity_verified": source.query_meta.get("identity_verified") is True,
+            }
+        )
     coverage = {source.dimension: source.coverage for source in sources}
-    coverage["topology"] = "present" if topology_edges else "empty"
     # logs coverage 应反映"任意来源的真实日志"：K8s collector 采到的容器日志也标了
     # dimension="logs"，避免 ES 空时误报 logs=empty（其实容器日志已采到）。
     if coverage.get("logs") in (None, "empty", "absent"):
@@ -224,6 +366,16 @@ def _write_package(
         )
         if k8s_has_logs:
             coverage["logs"] = "present"
+    entities, topology_edges, topology_summary = build_topology(
+        primary=primary,
+        k8s_record=k8s_record,
+        evidence_refs_by_dimension=refs_by_dimension,
+        deepflow_coverage=deepflow.coverage if deepflow else "absent",
+        deepflow_peers=deepflow_peers,
+        resolved_callers=resolved_callers,
+        coverage_by_dimension=coverage,
+    )
+    coverage["topology"] = "present" if topology_edges else "empty"
 
     case = {
         "case_id": case_id,
@@ -240,7 +392,11 @@ def _write_package(
     write_jsonl(case_dir / "entities.jsonl", entities)
     write_jsonl(case_dir / "topology.jsonl", topology_edges)
     write_jsonl(case_dir / "evidence" / "metrics.jsonl", _records_for_dimension(evidence_records, "metrics"))
-    write_jsonl(case_dir / "evidence" / "logs.jsonl", _records_for_dimension(evidence_records, "logs"))
+    write_jsonl(
+        case_dir / "evidence" / "logs.jsonl",
+        _records_for_dimension(evidence_records, "logs")
+        + _records_for_dimension(evidence_records, "caller_logs"),
+    )
     write_jsonl(case_dir / "evidence" / "deepflow_l4.jsonl", [])
     write_jsonl(case_dir / "evidence" / "deepflow_l7.jsonl", _records_for_dimension(evidence_records, "tracing"))
     write_jsonl(case_dir / "evidence" / "tempo_traces.jsonl", _records_for_dimension(evidence_records, "trace"))
@@ -253,6 +409,16 @@ def _write_package(
         (case_dir / "evidence" / "k8s_pod.yaml").write_text(str(meta.get("pod_yaml") or ""), encoding="utf-8")
 
 
+def _deepflow_peer_ips(rows: list[dict[str, Any]], pod_ip: str) -> list[str]:
+    peers: list[str] = []
+    for row in rows:
+        for key in ("src_ip", "dst_ip", "ip4_0", "ip4_1"):
+            ip = str(row.get(key) or "").strip()
+            if ip and ip != pod_ip and ip not in peers:
+                peers.append(ip)
+    return peers
+
+
 def case_summary(case_dir: Path) -> dict[str, Any]:
     case = read_yaml(case_dir / "case.yaml")
     if not case:
@@ -261,7 +427,20 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
     timeline = read_jsonl(case_dir / "timeline.jsonl", limit=12)
     entities = read_jsonl(case_dir / "entities.jsonl")
     topology = read_jsonl(case_dir / "topology.jsonl")
-    refs_by_dimension = case.get("recommended_refs_by_dimension") or _recommended_refs_by_dimension(_all_evidence_records(case_dir))
+    entities, topology = _scope_primary_topology(
+        case.get("primary_entity") if isinstance(case.get("primary_entity"), dict) else {},
+        entities,
+        topology,
+    )
+    evidence_records = _all_evidence_records(case_dir)
+    refs_by_dimension = case.get("recommended_refs_by_dimension") or _recommended_refs_by_dimension(evidence_records)
+    dimension_details = _build_dimension_details(case_dir, case.get("coverage", {}), entities, topology)
+    fact_ledger = build_fact_ledger(
+        case=case,
+        evidence_records=evidence_records,
+        entities=entities,
+        topology=topology,
+    )
     return {
         "ok": True,
         "case_id": case.get("case_id") or case_dir.name,
@@ -273,12 +452,338 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
         "signals_summary": [_select(item, ["signal_id", "dimension", "role", "strength", "observed", "interpretation", "source_system", "evidence_refs"]) for item in signals],
         "timeline_summary": [_select(item, ["timestamp", "dimension", "summary", "evidence_refs"]) for item in timeline],
         "topology_summary": summarize_topology(entities, topology),
+        "dimension_details": dimension_details,
         "evidence_inventory": evidence_inventory(case_dir),
         "evidence_refs": evidence_refs(case_dir),
         "recommended_refs_by_dimension": refs_by_dimension,
+        "fact_ledger": fact_ledger,
         "package_ref": str(case_dir),
         "runtime_status": runtime_status(),
     }
+
+
+def _scope_primary_topology(
+    primary: dict[str, Any],
+    entities: list[dict[str, Any]],
+    topology: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    namespace = str(primary.get("namespace") or "cluster")
+    name = str(primary.get("name") or "")
+    uid = str(primary.get("uid") or "")
+    if not name:
+        return entities, topology
+    primary_id = pod_entity_id(namespace, name, uid or None)
+    aliases = {
+        f"pod:{namespace}/{name}",
+        f"k8s.pod:{namespace}/{name}",
+        primary_id,
+    }
+
+    scoped_entities: list[dict[str, Any]] = []
+    seen_entity_ids: set[str] = set()
+    for entity in entities:
+        scoped = dict(entity)
+        entity_id_value = str(scoped.get("entity_id") or "")
+        if entity_id_value in aliases:
+            scoped["entity_id"] = primary_id
+            attributes = (
+                dict(scoped.get("attributes"))
+                if isinstance(scoped.get("attributes"), dict)
+                else {}
+            )
+            if uid:
+                attributes["uid"] = uid
+            scoped["attributes"] = attributes
+        normalized_id = str(scoped.get("entity_id") or "")
+        if normalized_id and normalized_id in seen_entity_ids:
+            continue
+        if normalized_id:
+            seen_entity_ids.add(normalized_id)
+        scoped_entities.append(scoped)
+
+    scoped_topology: list[dict[str, Any]] = []
+    for edge in topology:
+        scoped = scope_primary_topology_edge(edge, primary)
+        if scoped is None:
+            continue
+        scoped_topology.append(scoped)
+    return scoped_entities, scoped_topology
+
+
+def _build_dimension_details(
+    case_dir: Path,
+    coverage: dict[str, Any],
+    entities: list[dict[str, Any]],
+    topology: list[dict[str, Any]],
+) -> dict[str, Any]:
+    records = _all_evidence_records(case_dir)
+    metrics: list[dict[str, Any]] = []
+    logs: list[dict[str, Any]] = []
+    flows: list[dict[str, Any]] = []
+    spans: list[dict[str, Any]] = []
+    call_chains: list[dict[str, Any]] = []
+
+    for record in records:
+        evidence_ref = str(record.get("evidence_id") or "")
+        dimension = str(record.get("dimension") or "")
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        if dimension == "metrics":
+            for item in payload.get("highlights") or []:
+                if not isinstance(item, dict):
+                    continue
+                metrics.append(
+                    {
+                        "metric": item.get("metric") or "container_memory_working_set_bytes",
+                        "pod": item.get("pod"),
+                        "container": item.get("container"),
+                        "start": item.get("start"),
+                        "max": item.get("max"),
+                        "last": item.get("last"),
+                        "limit": item.get("limit"),
+                        "max_limit_ratio": item.get("max_limit_ratio"),
+                        "samples": (item.get("samples") or [])[:5],
+                        "evidence_ref": evidence_ref,
+                    }
+                )
+        elif dimension in {"logs", "caller_logs"}:
+            samples = payload.get("samples") or []
+            if not samples and payload.get("log_preview"):
+                samples = [
+                    {
+                        "timestamp": record.get("timestamp"),
+                        "message": line,
+                        "container": _container_from_summary(record.get("summary")),
+                    }
+                    for line in str(payload["log_preview"]).splitlines()
+                    if line.strip()
+                ][-8:]
+            for item in samples:
+                if not isinstance(item, dict) or not str(item.get("message") or "").strip():
+                    continue
+                logs.append(
+                    {
+                        "timestamp": item.get("timestamp"),
+                        "message": str(item.get("message") or "")[:600],
+                        "container": item.get("container"),
+                        "role": "request_driver" if dimension == "caller_logs" else "target",
+                        "source_system": record.get("source_system"),
+                        "evidence_ref": evidence_ref,
+                    }
+                )
+        elif dimension == "tracing":
+            for item in payload.get("samples") or []:
+                if not isinstance(item, dict):
+                    continue
+                flows.append(
+                    {
+                        "timestamp": item.get("timestamp"),
+                        "src": item.get("src"),
+                        "dst": item.get("dst"),
+                        "protocol": item.get("protocol"),
+                        "request": str(item.get("request") or "")[:240],
+                        "response_code": item.get("response_code"),
+                        "duration_us": item.get("duration_us"),
+                        "trace_id": item.get("trace_id"),
+                        "span_id": item.get("span_id"),
+                        "evidence_ref": evidence_ref,
+                    }
+                )
+            for chain in payload.get("call_chains") or []:
+                if isinstance(chain, dict):
+                    call_chains.append(
+                        {
+                            "syscall_trace_id": chain.get("syscall_trace_id"),
+                            "hop_count": chain.get("hop_count"),
+                            "hops": (chain.get("hops") or [])[:5],
+                            "evidence_ref": evidence_ref,
+                        }
+                    )
+        elif dimension == "trace":
+            for item in payload.get("spans") or []:
+                if not isinstance(item, dict):
+                    continue
+                spans.append(
+                    {
+                        "trace_id": item.get("trace_id"),
+                        "service": item.get("service"),
+                        "name": item.get("name"),
+                        "start": item.get("start"),
+                        "end": item.get("end"),
+                        "attributes": _compact_attributes(item.get("attributes")),
+                        "evidence_ref": evidence_ref,
+                    }
+                )
+
+    ranked_logs = _rank_log_samples(logs)
+    ranked_logs, flows, spans = _align_correlated_samples(ranked_logs, flows, spans)
+    topology_payload = topology_details(entities, topology)
+    topology_payload["coverage"] = str(coverage.get("topology") or ("present" if topology else "empty"))
+    details = {
+        "metrics": {
+            "coverage": str(coverage.get("metrics") or "absent"),
+            "highlights": metrics[:5],
+        },
+        "logs": {
+            "coverage": str(coverage.get("logs") or "absent"),
+            "samples": ranked_logs[:8],
+        },
+        "tracing": {
+            "coverage": _combined_coverage(coverage.get("tracing"), coverage.get("trace")),
+            "deepflow_coverage": str(coverage.get("tracing") or "absent"),
+            "tempo_coverage": str(coverage.get("trace") or "absent"),
+            "flows": flows[:5],
+            "spans": spans[:3],
+            "call_chains": call_chains[:3],
+        },
+        "topology": topology_payload,
+    }
+    return _fit_dimension_details(details)
+
+
+def _combined_coverage(*values: Any) -> str:
+    states = [str(value) for value in values if value]
+    for state in ("present", "weak", "error", "empty", "absent"):
+        if state in states:
+            return state
+    return "absent"
+
+
+def _container_from_summary(summary: Any) -> str | None:
+    match = re.search(r"container\s+([A-Za-z0-9._-]+)", str(summary or ""), re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _compact_attributes(attributes: Any, max_items: int = 8) -> dict[str, Any]:
+    if not isinstance(attributes, dict):
+        return {}
+    compact: dict[str, Any] = {}
+    for key, value in list(attributes.items())[:max_items]:
+        if isinstance(value, str):
+            compact[str(key)] = value[:160]
+        elif isinstance(value, (int, float, bool)) or value is None:
+            compact[str(key)] = value
+        else:
+            compact[str(key)] = str(value)[:160]
+    return compact
+
+
+def _rank_log_samples(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def priority(item: dict[str, Any]) -> tuple[int, int, int, int, int]:
+        message = str(item.get("message") or "")
+        allocated = [int(value) for value in _ALLOCATED_MIB_RE.findall(message)]
+        peak = max(allocated) if allocated else -1
+        evidence_ref = str(item.get("evidence_ref") or "")
+        role_rank = 0 if item.get("role") == "target" else 1
+        unusable_rank = 1 if re.search(
+            r"unable to retrieve|no logs|logs? unavailable|not found|error from server",
+            message,
+            re.IGNORECASE,
+        ) else 0
+        previous_rank = 0 if "previous" in evidence_ref else 1
+        failure_rank = 0 if re.search(
+            r"request_failed|config_missing|fatal|error_code|http_status.?[:=]?\s*500|"
+            r"exception|traceback|oomkilled|exit.?137",
+            message,
+            re.IGNORECASE,
+        ) else 1
+        return role_rank, unusable_rank, -peak, failure_rank, previous_rank
+
+    return sorted(samples, key=priority)
+
+
+def _align_correlated_samples(
+    logs: list[dict[str, Any]],
+    flows: list[dict[str, Any]],
+    spans: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    def log_trace_id(item: dict[str, Any]) -> str:
+        try:
+            payload = json.loads(str(item.get("message") or ""))
+        except json.JSONDecodeError:
+            return ""
+        return str(payload.get("trace_id") or "") if isinstance(payload, dict) else ""
+
+    log_ids = {trace_id for item in logs if (trace_id := log_trace_id(item))}
+    flow_ids = {str(item.get("trace_id") or "") for item in flows if item.get("trace_id")}
+    span_ids = {str(item.get("trace_id") or "") for item in spans if item.get("trace_id")}
+    shared_ids = log_ids & flow_ids & span_ids
+    if not shared_ids:
+        return logs, flows, spans
+
+    preferred = next(
+        (
+            str(item.get("trace_id"))
+            for item in flows
+            if str(item.get("trace_id") or "") in shared_ids
+        ),
+        sorted(shared_ids)[0],
+    )
+
+    def prioritize(items: list[dict[str, Any]], trace_id_getter) -> list[dict[str, Any]]:
+        return sorted(items, key=lambda item: 0 if trace_id_getter(item) == preferred else 1)
+
+    return (
+        prioritize(logs, log_trace_id),
+        prioritize(flows, lambda item: str(item.get("trace_id") or "")),
+        prioritize(spans, lambda item: str(item.get("trace_id") or "")),
+    )
+
+
+def _fit_dimension_details(details: dict[str, Any], max_chars: int = 6000) -> dict[str, Any]:
+    bounded = json.loads(json.dumps(details, ensure_ascii=False, default=str))
+
+    def rendered_size() -> int:
+        return len(json.dumps(bounded, ensure_ascii=False, separators=(",", ":")))
+
+    if rendered_size() <= max_chars:
+        return bounded
+
+    collections = [
+        bounded.get("logs", {}).get("samples", []),
+        bounded.get("tracing", {}).get("flows", []),
+        bounded.get("tracing", {}).get("spans", []),
+        bounded.get("tracing", {}).get("call_chains", []),
+        bounded.get("topology", {}).get("edges", []),
+        bounded.get("topology", {}).get("entities", []),
+        bounded.get("metrics", {}).get("highlights", []),
+    ]
+    minimums = [1, 1, 1, 0, 2, 2, 1]
+    while rendered_size() > max_chars:
+        changed = False
+        for items, minimum in zip(collections, minimums):
+            if len(items) > minimum:
+                items.pop()
+                changed = True
+                if rendered_size() <= max_chars:
+                    return bounded
+        if not changed:
+            break
+
+    for sample in bounded.get("logs", {}).get("samples", []):
+        sample["message"] = str(sample.get("message") or "")[:240]
+    for span in bounded.get("tracing", {}).get("spans", []):
+        span["attributes"] = _compact_attributes(span.get("attributes"), max_items=4)
+    for highlight in bounded.get("metrics", {}).get("highlights", []):
+        highlight["samples"] = (highlight.get("samples") or [])[:3]
+
+    if rendered_size() <= max_chars:
+        return bounded
+
+    for section in bounded.values():
+        _truncate_strings(section, 100)
+    return bounded
+
+
+def _truncate_strings(value: Any, limit: int) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, str) and len(item) > limit:
+                value[key] = item[:limit]
+            else:
+                _truncate_strings(item, limit)
+    elif isinstance(value, list):
+        for item in value:
+            _truncate_strings(item, limit)
 
 
 def get_case(cases_dir: Path, case_id: str) -> dict[str, Any]:
@@ -382,7 +887,7 @@ def _evidence_records(sources: list[SourceResult]) -> list[dict[str, Any]]:
                     dimension=source.dimension,
                     summary=source.error or f"{source.source_system} coverage is {source.coverage}",
                     confidence="weak" if source.coverage == "weak" else "low",
-                    directness="related_context" if source.coverage == "weak" else "direct",
+                    directness="related_context",
                     payload={"coverage": source.coverage, "query_meta": source.query_meta},
                 ).to_record()
             )
@@ -501,14 +1006,28 @@ def _timeline_from_sources(sources: list[SourceResult]) -> list[dict[str, Any]]:
 def _infer_abnormal_type(sources: list[SourceResult]) -> str:
     k8s = next((source for source in sources if source.dimension == "k8s"), None)
     record = k8s.records[0] if k8s and k8s.records else {}
-    status_text = str(record.get("container_statuses") or record.get("last_terminated") or "").lower()
-    evidence_text = " ".join(item.summary for item in (k8s.evidence if k8s else [])).lower()
+    status_text = json.dumps(
+        {
+            "container_statuses": record.get("container_statuses"),
+            "last_terminated": record.get("last_terminated"),
+        },
+        ensure_ascii=False,
+        default=str,
+    ).lower()
+    evidence_text = " ".join(
+        f"{item.summary} {json.dumps(item.payload or {}, ensure_ascii=False, default=str)}"
+        for item in (k8s.evidence if k8s else [])
+    ).lower()
     text = f"{status_text} {evidence_text}"
     if "oomkilled" in text:
         return "oomkilled"
     if "imagepullbackoff" in text or "errimagepull" in text:
         return "imagepullbackoff"
-    if "crashloopbackoff" in text:
+    if (
+        "crashloopbackoff" in text
+        or "back-off restarting failed container" in text
+        or "backoff restarting failed container" in text
+    ):
         return "crashloopbackoff"
     if record.get("deletion_timestamp"):
         return "terminating"

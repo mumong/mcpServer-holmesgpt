@@ -25,6 +25,8 @@ FR006_SUMMARY_FIELDS = [
     "evidence_inventory",
     "evidence_refs",
     "recommended_refs_by_dimension",
+    "dimension_details",
+    "fact_ledger",
 ]
 
 FORBIDDEN_DATA_REFS = [
@@ -63,6 +65,20 @@ class CoarseContractTests(unittest.TestCase):
         collect = next(t for t in aiops_case.TOOLS if t.name == "collect_aiops_case")
         self.assertEqual(collect.inputSchema["required"], ["pod"])  # namespace+pod primary, pod mandatory
 
+    def test_collect_aiops_case_description_marks_preferred_live_entrypoint(self):
+        collect = next(tool for tool in aiops_case.TOOLS if tool.name == "collect_aiops_case")
+        description = collect.description.lower()
+        for term in (
+            "preferred",
+            "prometheus",
+            "logging",
+            "deepflow",
+            "tempo",
+            "topology",
+            "abnormal kubernetes pod",
+        ):
+            self.assertIn(term, description)
+
     def test_get_aiops_case_summary_satisfies_fr006_contract(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -74,6 +90,8 @@ class CoarseContractTests(unittest.TestCase):
         for field in FR006_SUMMARY_FIELDS:
             self.assertIn(field, payload, f"FR-006 requires '{field}' in the coarse case summary")
         self.assertEqual(payload["coverage"]["tracing"], "weak")  # honest weak state survives
+        self.assertEqual(payload["fact_ledger"]["contract_version"], "aiops.fact-ledger.v1")
+        self.assertFalse(payload["fact_ledger"]["legacy_contract"])
 
 
 class NoDataDependencyTests(unittest.TestCase):

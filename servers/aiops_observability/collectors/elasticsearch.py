@@ -27,18 +27,17 @@ def _query_body(namespace: str, pod: str, pod_uid: str | None, start: str, end: 
     # Pod identity is REQUIRED, not optional: otherwise a namespace-only match
     # returns logs from every pod in the namespace and mis-attributes them to the
     # target pod. Tolerate Filebeat field-name variants inside the required clause.
-    pod_identity_terms: list[dict[str, Any]] = [
-        {"term": {"kubernetes.pod.name": pod}},
-        {"term": {"kubernetes.pod_name": pod}},
-        {"term": {"kubernetes.pod.name.keyword": pod}},
-    ]
     if pod_uid:
-        pod_identity_terms.extend(
-            [
-                {"term": {"kubernetes.pod.uid": pod_uid}},
-                {"term": {"kubernetes.pod.uid.keyword": pod_uid}},
-            ]
-        )
+        pod_identity_terms: list[dict[str, Any]] = [
+            {"term": {"kubernetes.pod.uid": pod_uid}},
+            {"term": {"kubernetes.pod.uid.keyword": pod_uid}},
+        ]
+    else:
+        pod_identity_terms = [
+            {"term": {"kubernetes.pod.name": pod}},
+            {"term": {"kubernetes.pod_name": pod}},
+            {"term": {"kubernetes.pod.name.keyword": pod}},
+        ]
     namespace_terms = [
         {"term": {"kubernetes.namespace": namespace}},
         {"term": {"kubernetes.namespace_name": namespace}},
@@ -74,6 +73,14 @@ def _parse_hits(payload: dict[str, Any], namespace: str, pod: str, max_records: 
     coverage = "present" if records else "empty"
     evidence = []
     if records:
+        samples = [
+            {
+                "timestamp": record.get("timestamp"),
+                "message": str(record.get("message") or "")[:1200],
+                "container": _container_name(record.get("kubernetes")),
+            }
+            for record in records[:8]
+        ]
         evidence.append(
             EvidenceItem(
                 evidence_id=evidence_id("log", namespace, pod, "elasticsearch"),
@@ -82,7 +89,7 @@ def _parse_hits(payload: dict[str, Any], namespace: str, pod: str, max_records: 
                 summary=f"Elasticsearch/Filebeat returned {len(records)} Pod log records（来源：{source_desc}）",
                 confidence="high",
                 directness="direct",
-                payload={"records": records[:10], "source": source_desc},
+                payload={"records": records[:10], "samples": samples, "source": source_desc},
             )
         )
     return SourceResult(
@@ -94,6 +101,17 @@ def _parse_hits(payload: dict[str, Any], namespace: str, pod: str, max_records: 
         query_meta={"source": source_desc, "matched": len(hits)},
         truncated=len(hits) > len(records),
     )
+
+
+def _container_name(kubernetes: Any) -> str | None:
+    if not isinstance(kubernetes, dict):
+        return None
+    container = kubernetes.get("container")
+    if isinstance(container, dict):
+        return container.get("name")
+    if isinstance(container, str):
+        return container
+    return kubernetes.get("container_name")
 
 
 def _collect_via_exec(

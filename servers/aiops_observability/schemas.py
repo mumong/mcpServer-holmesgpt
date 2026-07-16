@@ -41,9 +41,13 @@ class TimeWindow:
     start: str
     end: str
     timezone: str = "UTC"
+    empty: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if not self.empty:
+            payload.pop("empty", None)
+        return payload
 
 
 @dataclass
@@ -96,4 +100,3 @@ class SourceResult:
 def evidence_id(prefix: str, *parts: str | None) -> str:
     clean_parts = [str(part).strip().replace("/", "-").replace(" ", "-") for part in parts if part]
     return "-".join([prefix] + clean_parts).lower()
-

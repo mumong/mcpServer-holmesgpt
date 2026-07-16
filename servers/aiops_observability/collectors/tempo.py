@@ -9,7 +9,10 @@ logs. For non-instrumented pods there are simply no trace_ids -> absent
 
 from __future__ import annotations
 
+import base64
 import json
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 from ..config import get_config
@@ -34,6 +37,7 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
             error=f"未找到 Tempo/LGTM Pod（ns={cfg.tempo_exec_namespace} selector={cfg.tempo_exec_selector}）",
         )
     found: list[dict[str, Any]] = []
+    span_samples: list[dict[str, Any]] = []
     for tid in ids:
         url = f"{cfg.tempo_local_url.rstrip('/')}/api/traces/{tid}"
         ok, out, _ = _kube.exec_in_pod(cfg.tempo_exec_namespace, tempo_pod, ["curl", "-s", url], timeout=timeout)
@@ -43,9 +47,11 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
             payload = json.loads(out)
         except json.JSONDecodeError:
             continue
-        span_count = _count_spans(payload)
+        extracted = _extract_spans(payload, fallback_trace_id=tid)
+        span_count = len(extracted)
         if span_count > 0:
             found.append({"trace_id": tid, "span_count": span_count})
+            span_samples.extend(extracted[: max(0, 3 - len(span_samples))])
     if not found:
         return SourceResult(
             "tempo", "trace", "empty",
@@ -62,7 +68,11 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
             confidence="high",
             directness="direct",
             trace_correlation={"trace_ids": [t["trace_id"] for t in found]},
-            payload={"traces": found, "source": f"kubectl exec {tempo_pod}"},
+            payload={
+                "traces": found,
+                "spans": span_samples[:3],
+                "source": f"kubectl exec {tempo_pod}",
+            },
         )
     ]
     return SourceResult(
@@ -75,12 +85,95 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
 
 def _count_spans(payload: Any) -> int:
     """Count spans across Tempo's OTLP-ish trace JSON (batches/resourceSpans/scopeSpans/spans)."""
-    total = 0
-    if isinstance(payload, dict):
-        for key in ("batches", "resourceSpans"):
-            for batch in payload.get(key) or []:
-                for scope in (batch.get("scopeSpans") or batch.get("instrumentationLibrarySpans") or []):
-                    total += len(scope.get("spans") or [])
-        if not total and isinstance(payload.get("spans"), list):
-            total += len(payload["spans"])
-    return total
+    return len(_extract_spans(payload))
+
+
+def _extract_spans(payload: Any, fallback_trace_id: str = "") -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    extracted: list[dict[str, Any]] = []
+    batches = []
+    for key in ("batches", "resourceSpans"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            batches.extend(value)
+    for batch in batches:
+        resource_attributes = _attributes(((batch or {}).get("resource") or {}).get("attributes"))
+        service = str(resource_attributes.get("service.name") or "")
+        scopes = (batch or {}).get("scopeSpans") or (batch or {}).get("instrumentationLibrarySpans") or []
+        for scope in scopes:
+            for span in (scope or {}).get("spans") or []:
+                extracted.append(_span_sample(span, service, fallback_trace_id))
+    if not extracted and isinstance(payload.get("spans"), list):
+        extracted.extend(_span_sample(span, "", fallback_trace_id) for span in payload["spans"])
+    return extracted
+
+
+def _span_sample(span: Any, service: str, fallback_trace_id: str) -> dict[str, Any]:
+    item = span if isinstance(span, dict) else {}
+    attributes = _attributes(item.get("attributes"))
+    return {
+        "trace_id": _normalize_trace_id(
+            item.get("traceId") or item.get("trace_id"),
+            fallback_trace_id,
+        ),
+        "service": service or attributes.get("service.name") or "",
+        "name": item.get("name") or "",
+        "start": _readable_time(item.get("startTimeUnixNano") or item.get("start_time_unix_nano") or item.get("start")),
+        "end": _readable_time(item.get("endTimeUnixNano") or item.get("end_time_unix_nano") or item.get("end")),
+        "attributes": attributes,
+    }
+
+
+def _normalize_trace_id(value: Any, fallback: str = "") -> str:
+    text = str(value or "").strip()
+    if re.fullmatch(r"[0-9a-fA-F]{32}", text):
+        return text.lower()
+    if text:
+        try:
+            decoded = base64.b64decode(text, validate=True)
+        except (ValueError, TypeError):
+            decoded = b""
+        if len(decoded) == 16:
+            return decoded.hex()
+    return str(fallback or "").strip().lower()
+
+
+def _attributes(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {str(key): _attribute_value(item) for key, item in value.items()}
+    result: dict[str, Any] = {}
+    for item in value or []:
+        if not isinstance(item, dict) or not item.get("key"):
+            continue
+        result[str(item["key"])] = _attribute_value(item.get("value"))
+    return result
+
+
+def _attribute_value(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    for key in ("stringValue", "intValue", "doubleValue", "boolValue"):
+        if key in value:
+            raw = value[key]
+            if key == "intValue":
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    return raw
+            return raw
+    if "arrayValue" in value:
+        values = (value.get("arrayValue") or {}).get("values") or []
+        return [_attribute_value(item) for item in values]
+    return value
+
+
+def _readable_time(value: Any) -> str:
+    text = str(value or "")
+    try:
+        nanoseconds = int(text)
+    except ValueError:
+        return text
+    if nanoseconds < 1_000_000_000_000_000:
+        return text
+    return datetime.fromtimestamp(nanoseconds / 1_000_000_000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
