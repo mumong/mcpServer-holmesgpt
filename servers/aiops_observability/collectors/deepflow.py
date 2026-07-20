@@ -53,7 +53,8 @@ def _build_sql(database: str, pod_ip: str, start: str, end: str, max_records: in
         f"WHERE time >= toDateTime('{_clickhouse_datetime(start)}', 'UTC') "
         f"AND time <= toDateTime('{_clickhouse_datetime(end)}', 'UTC') "
         f"AND (ip4_0 = '{pod_ip}' OR ip4_1 = '{pod_ip}') "
-        f"ORDER BY time DESC "
+        f"ORDER BY (trace_id != '') DESC, (ip4_1 = '{pod_ip}') DESC, "
+        f"(l7_protocol_str != 'DNS') DESC, time DESC "
         f"LIMIT {int(max_records)} FORMAT JSON"
     )
 
@@ -89,6 +90,36 @@ def _build_call_chains(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
     chains.sort(key=lambda c: -c["hop_count"])
     return chains[:5]
+
+
+def _flow_samples(rows: list[dict[str, Any]], max_samples: int = 5) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            not bool(str(row.get("trace_id") or "").strip()),
+            str(row.get("l7_protocol_str") or row.get("l7_protocol") or "").upper() == "DNS",
+            str(row.get("l7_protocol_str") or row.get("l7_protocol") or "").upper() != "HTTP",
+        ),
+    )
+    for row in ranked[:max_samples]:
+        request_type = str(row.get("request_type") or "").strip()
+        resource = str(row.get("request_resource") or "").strip()
+        request = " ".join(part for part in (request_type, resource) if part)
+        samples.append(
+            {
+                "timestamp": row.get("time") or row.get("timestamp"),
+                "src": row.get("src_ip") or row.get("ip4_0"),
+                "dst": row.get("dst_ip") or row.get("ip4_1"),
+                "protocol": row.get("l7_protocol_str") or row.get("l7_protocol"),
+                "request": request,
+                "response_code": row.get("response_code"),
+                "duration_us": row.get("response_duration") or row.get("duration_us"),
+                "trace_id": row.get("trace_id") or "",
+                "span_id": row.get("span_id") or "",
+            }
+        )
+    return samples
 
 
 def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dict[str, Any] | None:
@@ -211,7 +242,11 @@ def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_
                 confidence="medium",
                 directness="direct",
                 trace_correlation={"pod_ip": pod_ip, "trace_ids": app_trace_ids[:5]},
-                payload={"records": rows[:10], "source": source_desc},
+                payload={
+                    "records": rows[:10],
+                    "samples": _flow_samples(rows),
+                    "source": source_desc,
+                },
             )
         )
         # eBPF 自动追踪调用链（无需 app 插桩，任意 pod 可得）

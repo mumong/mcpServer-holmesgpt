@@ -16,8 +16,9 @@ from servers.aiops_observability.collectors import (
     elasticsearch,
     kubernetes,
     prometheus,
+    tempo,
 )
-from servers.aiops_observability.topology import build_topology
+from servers.aiops_observability.topology import build_topology, topology_details
 
 
 class _Resp:
@@ -73,6 +74,100 @@ class KubernetesCollectorTests(unittest.TestCase):
 
 
 class PrometheusCollectorTests(unittest.TestCase):
+    def test_memory_highlights_filter_pause_and_deduplicate_scrapers(self):
+        range_results = [
+            {
+                "metric": {
+                    "namespace": "aiops-temp",
+                    "pod": "aiops-oom-business-abc",
+                    "container": "business-api",
+                    "service": "observability-kubelet",
+                    "image": "python:3-alpine",
+                },
+                "values": [[100, "18874368"], [115, "50331648"], [130, "66060288"]],
+            },
+            {
+                "metric": {
+                    "namespace": "aiops-temp",
+                    "pod": "aiops-oom-business-abc",
+                    "container": "business-api",
+                    "service": "duplicate-kubelet",
+                    "image": "python:3-alpine",
+                },
+                "values": [[100, "18874368"], [115, "50331648"], [130, "66060288"]],
+            },
+            {
+                "metric": {
+                    "namespace": "aiops-temp",
+                    "pod": "aiops-oom-business-abc",
+                    "container": "POD",
+                    "image": "registry.k8s.io/pause:3.9",
+                },
+                "values": [[100, "196608"], [130, "196608"]],
+            },
+        ]
+        limit_results = [
+            {
+                "metric": {
+                    "namespace": "aiops-temp",
+                    "pod": "aiops-oom-business-abc",
+                    "container": "business-api",
+                },
+                "value": [130, "67108864"],
+            }
+        ]
+
+        highlights = prometheus._memory_highlights(range_results, limit_results)
+
+        self.assertEqual(len(highlights), 1)
+        self.assertEqual(highlights[0]["container"], "business-api")
+        self.assertEqual(highlights[0]["start"], "18.0Mi")
+        self.assertEqual(highlights[0]["max"], "63.0Mi")
+        self.assertEqual(highlights[0]["last"], "63.0Mi")
+        self.assertEqual(highlights[0]["limit"], "64.0Mi")
+        self.assertAlmostEqual(highlights[0]["max_limit_ratio"], 0.9844, places=4)
+        self.assertLessEqual(len(highlights[0]["samples"]), 5)
+
+    def test_memory_highlights_empty_does_not_claim_growth(self):
+        self.assertEqual(prometheus._memory_highlights([], []), [])
+
+    def test_memory_highlights_prioritize_highest_limit_ratio(self):
+        range_results = [
+            {
+                "metric": {
+                    "namespace": "ns",
+                    "pod": "pod-a",
+                    "container": "a-sidecar",
+                    "image": "sidecar:1",
+                },
+                "values": [[100, str(20 * 1024 * 1024)]],
+            },
+            {
+                "metric": {
+                    "namespace": "ns",
+                    "pod": "pod-a",
+                    "container": "z-business-api",
+                    "image": "api:1",
+                },
+                "values": [[100, str(75 * 1024 * 1024)]],
+            },
+        ]
+        limit_results = [
+            {
+                "metric": {"namespace": "ns", "pod": "pod-a", "container": "a-sidecar"},
+                "value": [100, str(128 * 1024 * 1024)],
+            },
+            {
+                "metric": {"namespace": "ns", "pod": "pod-a", "container": "z-business-api"},
+                "value": [100, str(80 * 1024 * 1024)],
+            },
+        ]
+
+        highlights = prometheus._memory_highlights(range_results, limit_results)
+
+        self.assertEqual(highlights[0]["container"], "z-business-api")
+        self.assertEqual(highlights[0]["max_limit_ratio"], 0.9375)
+
     def test_absent_when_url_missing(self):
         result = prometheus.collect_prometheus(
             prometheus_url="", namespace="ns", pod="p", pod_uid=None, timeout=5
@@ -82,18 +177,25 @@ class PrometheusCollectorTests(unittest.TestCase):
 
     def test_present_when_series_returned(self):
         payload = {"status": "success", "data": {"result": [{"metric": {}, "value": [0, "1"]}]}}
-        with patch.object(prometheus, "_query", return_value=payload):
+        with patch.object(prometheus, "_query", return_value=payload), patch.object(
+            prometheus, "_query_range", return_value={"status": "success", "data": {"result": []}}
+        ):
             result = prometheus.collect_prometheus(
-                prometheus_url="http://prom:9090", namespace="ns", pod="p", pod_uid="uid", timeout=5
+                prometheus_url="http://prom:9090", namespace="ns", pod="p", pod_uid="uid", timeout=5,
+                start="2026-07-13T00:00:00Z", end="2026-07-13T00:30:00Z",
             )
         self.assertEqual(result.coverage, "present")
         self.assertTrue(result.evidence)
+        self.assertIn("highlights", result.evidence[0].payload)
 
     def test_empty_when_success_but_no_series(self):
         payload = {"status": "success", "data": {"result": []}}
-        with patch.object(prometheus, "_query", return_value=payload):
+        with patch.object(prometheus, "_query", return_value=payload), patch.object(
+            prometheus, "_query_range", return_value=payload
+        ):
             result = prometheus.collect_prometheus(
-                prometheus_url="http://prom:9090", namespace="ns", pod="p", pod_uid=None, timeout=5
+                prometheus_url="http://prom:9090", namespace="ns", pod="p", pod_uid=None, timeout=5,
+                start="2026-07-13T00:00:00Z", end="2026-07-13T00:30:00Z",
             )
         self.assertEqual(result.coverage, "empty")
 
@@ -108,6 +210,36 @@ class PrometheusCollectorTests(unittest.TestCase):
 
 
 class ElasticsearchCollectorTests(unittest.TestCase):
+    def test_log_evidence_contains_at_most_eight_readable_samples(self):
+        hits_payload = {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "@timestamp": f"2026-07-13T00:00:{index:02d}Z",
+                            "message": f"trace_id=abc allocated_mib={index}",
+                            "kubernetes": {"container": {"name": "business-api"}},
+                        }
+                    }
+                    for index in range(12)
+                ]
+            }
+        }
+
+        result = elasticsearch._parse_hits(
+            hits_payload,
+            "aiops-temp",
+            "aiops-oom-business",
+            max_records=12,
+            source_desc="unit-test",
+        )
+
+        samples = result.evidence[0].payload["samples"]
+        self.assertEqual(len(samples), 8)
+        self.assertEqual(samples[0]["timestamp"], "2026-07-13T00:00:00Z")
+        self.assertIn("allocated_mib=0", samples[0]["message"])
+        self.assertEqual(samples[0]["container"], "business-api")
+
     def test_absent_when_url_missing_and_exec_disabled(self):
         import os
         with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "false", "ELASTICSEARCH_URL": "", "ES_URL": ""}):
@@ -181,6 +313,87 @@ class ElasticsearchCollectorTests(unittest.TestCase):
 
 
 class DeepflowCollectorTests(unittest.TestCase):
+    def test_build_sql_prioritizes_trace_correlated_inbound_non_dns_flows(self):
+        sql = deepflow._build_sql(
+            "flow_log",
+            "10.0.0.20",
+            "2026-07-13T00:00:00Z",
+            "2026-07-13T00:30:00Z",
+            50,
+        )
+
+        self.assertIn("(trace_id != '') DESC", sql)
+        self.assertIn("(ip4_1 = '10.0.0.20') DESC", sql)
+        self.assertIn("(l7_protocol_str != 'DNS') DESC", sql)
+
+    def test_flow_samples_prioritize_business_http_over_newer_dns(self):
+        rows = [
+            {
+                "time": "2026-07-13 00:00:02",
+                "src_ip": "10.0.0.20",
+                "dst_ip": "10.0.0.53",
+                "l7_protocol_str": "DNS",
+                "request_type": "A",
+                "request_resource": "lgtm.xnet.svc.cluster.local",
+                "trace_id": "",
+            },
+            {
+                "time": "2026-07-13 00:00:01",
+                "src_ip": "10.0.0.10",
+                "dst_ip": "10.0.0.20",
+                "l7_protocol_str": "HTTP",
+                "request_type": "GET",
+                "request_resource": "/allocate?mib=2",
+                "response_code": 200,
+                "trace_id": "0123456789abcdef0123456789abcdef",
+            },
+        ]
+
+        samples = deepflow._flow_samples(rows)
+
+        self.assertEqual(samples[0]["protocol"], "HTTP")
+        self.assertEqual(samples[0]["request"], "GET /allocate?mib=2")
+        self.assertEqual(samples[0]["trace_id"], "0123456789abcdef0123456789abcdef")
+
+    def test_flow_evidence_contains_at_most_five_readable_samples(self):
+        rows = [
+            {
+                "time": f"2026-07-13 00:00:0{index}",
+                "src_ip": "10.0.0.10",
+                "dst_ip": "10.0.0.20",
+                "l7_protocol_str": "HTTP",
+                "request_type": "GET",
+                "request_resource": "/allocate?mib=2",
+                "response_code": 200,
+                "response_duration": 1200 + index,
+                "trace_id": f"trace-{index}",
+                "span_id": f"span-{index}",
+            }
+            for index in range(8)
+        ]
+
+        result = deepflow._result_from_rows(
+            rows,
+            "aiops-temp",
+            "aiops-oom-business",
+            "10.0.0.20",
+            "master",
+            "SELECT ...",
+            "flow_log",
+            "unit-test",
+            max_records=10,
+        )
+
+        samples = result.evidence[0].payload["samples"]
+        self.assertEqual(len(samples), 5)
+        self.assertEqual(samples[0]["request"], "GET /allocate?mib=2")
+        self.assertEqual(samples[0]["src"], "10.0.0.10")
+        self.assertEqual(samples[0]["dst"], "10.0.0.20")
+        self.assertEqual(samples[0]["protocol"], "HTTP")
+        self.assertEqual(samples[0]["response_code"], 200)
+        self.assertEqual(samples[0]["trace_id"], "trace-0")
+        self.assertEqual(samples[0]["span_id"], "span-0")
+
     def test_absent_when_url_missing_and_exec_disabled(self):
         import os
         with patch.dict(os.environ, {"AIOPS_CLICKHOUSE_EXEC_ENABLED": "false", "DEEPFLOW_CLICKHOUSE_URL": "", "CLICKHOUSE_URL": ""}):
@@ -259,6 +472,37 @@ class DeepflowCollectorTests(unittest.TestCase):
 
 
 class TopologyTests(unittest.TestCase):
+    def test_builds_direct_caller_pod_edge_when_caller_is_resolved(self):
+        primary = {
+            "namespace": "aiops-traced-oom",
+            "name": "trace-oom-api-abc",
+            "pod_ip": "10.0.0.20",
+            "node": "node2",
+        }
+
+        entities, edges, _ = build_topology(
+            primary=primary,
+            k8s_record={},
+            evidence_refs_by_dimension={"k8s": ["k8s-ref"], "tracing": ["deepflow-ref"]},
+            deepflow_coverage="present",
+            resolved_callers=[
+                {
+                    "namespace": "aiops-traced-oom",
+                    "pod": "trace-oom-driver-def",
+                    "pod_ip": "10.0.0.10",
+                }
+            ],
+        )
+
+        caller = next(item for item in entities if item.get("name") == "trace-oom-driver-def")
+        call_edge = next(item for item in edges if item.get("relation") == "calls")
+        self.assertEqual(caller["kind"], "Pod")
+        self.assertEqual(call_edge["source"], caller["entity_id"])
+        self.assertEqual(call_edge["target"], "pod:aiops-traced-oom/trace-oom-api-abc")
+        self.assertEqual(call_edge["source_system"], "deepflow+kubernetes")
+        self.assertEqual(call_edge["directness"], "direct")
+        self.assertEqual(call_edge["confidence"], "high")
+
     def test_builds_owner_service_and_peer_topology(self):
         primary = {"namespace": "aiops-temp", "name": "web-1", "uid": "u1", "pod_ip": "10.0.0.5", "node": "node1"}
         k8s_record = {
@@ -292,6 +536,62 @@ class TopologyTests(unittest.TestCase):
         self.assertIn("Service", summary["entity_kinds"])
         self.assertIn("Deployment", summary["entity_kinds"])
         self.assertIn("owned_by", summary["relations"])
+
+    def test_topology_details_exposes_human_readable_relationships(self):
+        entities = [
+            {"entity_id": "service:aiops-temp/oom-svc", "kind": "Service", "name": "oom-svc"},
+            {"entity_id": "pod:aiops-temp/oom-1", "kind": "Pod", "name": "oom-1"},
+            {"entity_id": "node:cluster/master", "kind": "Node", "name": "master"},
+        ]
+        edges = [
+            {
+                "source": "service:aiops-temp/oom-svc",
+                "target": "pod:aiops-temp/oom-1",
+                "relation": "selects",
+                "source_system": "kubernetes",
+                "directness": "direct",
+                "confidence": "high",
+                "evidence_refs": ["k8s-ref"],
+            },
+            {
+                "source": "pod:aiops-temp/oom-1",
+                "target": "node:cluster/master",
+                "relation": "scheduled_on",
+                "source_system": "kubernetes",
+                "directness": "direct",
+                "confidence": "high",
+                "evidence_refs": ["k8s-ref"],
+            },
+        ]
+
+        details = topology_details(entities, edges)
+
+        self.assertEqual(details["edges"][0]["relationship"], "Service --selects--> Pod")
+        self.assertEqual(details["edges"][0]["source"], "oom-svc")
+        self.assertEqual(details["edges"][0]["target"], "oom-1")
+        self.assertEqual(details["edges"][0]["directness"], "direct")
+        self.assertEqual(details["edges"][0]["confidence"], "high")
+        self.assertEqual(details["edges"][0]["evidence_refs"], ["k8s-ref"])
+
+    def test_topology_details_prioritizes_causal_edges_under_budget(self):
+        entities = [
+            {"entity_id": "pod:ns/api", "kind": "Pod", "name": "api"},
+            {"entity_id": "pod:ns/driver", "kind": "Pod", "name": "driver"},
+            {"entity_id": "service:ns/api", "kind": "Service", "name": "api"},
+            {"entity_id": "node:cluster/node2", "kind": "Node", "name": "node2"},
+        ]
+        edges = [
+            {"source": "pod:ns/api", "target": "node:cluster/node2", "relation": "scheduled_on"},
+            {"source": "pod:ns/driver", "target": "pod:ns/api", "relation": "calls"},
+            {"source": "service:ns/api", "target": "pod:ns/api", "relation": "selects"},
+        ]
+
+        details = topology_details(entities, edges, max_edges=2)
+
+        self.assertEqual(
+            [item["relationship"] for item in details["edges"]],
+            ["Pod --calls--> Pod", "Service --selects--> Pod"],
+        )
 
 
 class SignalsAndTempoTests(unittest.TestCase):
@@ -338,12 +638,111 @@ class SignalsAndTempoTests(unittest.TestCase):
         self.assertEqual(r.coverage, "present")
         self.assertIn("span", r.evidence[0].summary.lower())
 
+    def test_tempo_evidence_contains_at_most_three_readable_span_samples(self):
+        import os
+        trace_payload = {
+            "batches": [
+                {
+                    "resource": {
+                        "attributes": [
+                            {"key": "service.name", "value": {"stringValue": "aiops-oom-business"}}
+                        ]
+                    },
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "traceId": "abc123",
+                                    "spanId": f"span-{index}",
+                                    "name": "GET /allocate",
+                                    "startTimeUnixNano": str(1000 + index),
+                                    "endTimeUnixNano": str(2000 + index),
+                                    "attributes": [
+                                        {
+                                            "key": "aiops.allocated_mib.after",
+                                            "value": {"intValue": str(40 + index)},
+                                        }
+                                    ],
+                                }
+                                for index in range(5)
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
+             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
+             patch.object(tempo._kube, "exec_in_pod", return_value=(True, json.dumps(trace_payload), "")):
+            result = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=["abc123"], timeout=5)
+
+        samples = result.evidence[0].payload["spans"]
+        self.assertEqual(len(samples), 3)
+        self.assertEqual(samples[0]["trace_id"], "abc123")
+        self.assertEqual(samples[0]["service"], "aiops-oom-business")
+        self.assertEqual(samples[0]["name"], "GET /allocate")
+        self.assertEqual(samples[0]["start"], "1000")
+        self.assertEqual(samples[0]["end"], "2000")
+        self.assertEqual(samples[0]["attributes"]["aiops.allocated_mib.after"], 40)
+
+    def test_tempo_normalizes_otlp_base64_trace_id_to_w3c_hex(self):
+        from servers.aiops_observability.collectors import tempo
+
+        sample = tempo._span_sample(
+            {"traceId": "A3l/0tEv2h7SNWp6yPaRpg==", "name": "GET /allocate"},
+            "aiops-traced-oom-api",
+            "03797fd2d12fda1ed2356a7ac8f691a6",
+        )
+
+        self.assertEqual(sample["trace_id"], "03797fd2d12fda1ed2356a7ac8f691a6")
+
 
 if __name__ == "__main__":
     unittest.main()
 
 
 class IndependentAuditFixTests(unittest.TestCase):
+    def test_merge_trace_ids_preserves_business_flow_priority(self):
+        from servers.aiops_observability.case_builder import _merge_trace_ids
+
+        merged = _merge_trace_ids(
+            ["flow-newest", "flow-older"],
+            ["alphabetic-first", "flow-newest"],
+            ["log-trace"],
+        )
+
+        self.assertEqual(
+            merged,
+            ["flow-newest", "flow-older", "alphabetic-first", "log-trace"],
+        )
+
+    def test_merge_trace_ids_reserves_capacity_for_later_log_trace(self):
+        from servers.aiops_observability.case_builder import _merge_trace_ids
+
+        merged = _merge_trace_ids(
+            [f"flow-{index:02d}" for index in range(20)],
+            ["discovered-trace"],
+            ["log-trace"],
+            limit=20,
+        )
+
+        self.assertEqual(len(merged), 20)
+        self.assertIn("discovered-trace", merged)
+        self.assertIn("log-trace", merged)
+
+    def test_deepflow_peer_ips_support_clickhouse_alias_fields(self):
+        from servers.aiops_observability.case_builder import _deepflow_peer_ips
+
+        peers = _deepflow_peer_ips(
+            [
+                {"src_ip": "10.0.0.10", "dst_ip": "10.0.0.20"},
+                {"ip4_0": "10.0.0.30", "ip4_1": "10.0.0.20"},
+            ],
+            pod_ip="10.0.0.20",
+        )
+
+        self.assertEqual(peers, ["10.0.0.10", "10.0.0.30"])
+
     def test_extract_trace_ids_from_log_evidence(self):
         from servers.aiops_observability.case_builder import _trace_ids_from_evidence
         from servers.aiops_observability.schemas import EvidenceItem, SourceResult

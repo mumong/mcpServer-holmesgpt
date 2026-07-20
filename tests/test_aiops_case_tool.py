@@ -5,7 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from servers.aiops_observability.case_builder import _infer_abnormal_type
+from servers.aiops_observability.case_builder import (
+    _align_correlated_samples,
+    _fit_dimension_details,
+    _infer_abnormal_type,
+    _rank_log_samples,
+    _write_package,
+)
 from servers.aiops_observability.schemas import EvidenceItem, SourceResult
 from servers.holmes_tools import aiops_case
 
@@ -67,20 +73,62 @@ recommended_refs_by_dimension:
             encoding="utf-8",
         )
         (case_dir / "entities.jsonl").write_text(
-            json.dumps({"entity_id": "pod:aiops-temp/aiops-oom-business", "kind": "Pod"}) + "\n",
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "entity_id": "service:aiops-temp/aiops-oom-business",
+                            "kind": "Service",
+                            "namespace": "aiops-temp",
+                            "name": "aiops-oom-business",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "entity_id": "pod:aiops-temp/aiops-oom-business",
+                            "kind": "Pod",
+                            "namespace": "aiops-temp",
+                            "name": "aiops-oom-business",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "entity_id": "node:cluster/master",
+                            "kind": "Node",
+                            "name": "master",
+                        }
+                    ),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
         (case_dir / "topology.jsonl").write_text(
-            json.dumps(
-                {
-                    "source": "pod:aiops-temp/aiops-oom-business",
-                    "relation": "scheduled_on",
-                    "target": "node:cluster/master",
-                    "source_system": "kubernetes",
-                    "directness": "direct",
-                    "confidence": "high",
-                    "evidence_refs": ["k8s-aiops-temp-aiops-oom-business-pod-yaml"],
-                }
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "source": "service:aiops-temp/aiops-oom-business",
+                            "relation": "selects",
+                            "target": "pod:aiops-temp/aiops-oom-business",
+                            "source_system": "kubernetes",
+                            "directness": "direct",
+                            "confidence": "high",
+                            "evidence_refs": ["k8s-aiops-temp-aiops-oom-business-pod-yaml"],
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "source": "pod:aiops-temp/aiops-oom-business",
+                            "relation": "scheduled_on",
+                            "target": "node:cluster/master",
+                            "source_system": "kubernetes",
+                            "directness": "direct",
+                            "confidence": "high",
+                            "evidence_refs": ["k8s-aiops-temp-aiops-oom-business-pod-yaml"],
+                        }
+                    ),
+                ]
             )
             + "\n",
             encoding="utf-8",
@@ -112,14 +160,98 @@ recommended_refs_by_dimension:
                     "summary": "memory reached limit",
                     "confidence": "high",
                     "directness": "direct",
+                    "payload": {
+                        "highlights": [
+                            {
+                                "metric": "container_memory_working_set_bytes",
+                                "container": "business-api",
+                                "start": "18.4Mi",
+                                "max": "63.2Mi",
+                                "last": "0.3Mi",
+                                "limit": "64.0Mi",
+                                "max_limit_ratio": 0.9875,
+                                "samples": ["00:00:00=18.4Mi", "00:01:00=63.2Mi"],
+                            }
+                        ]
+                    },
                 }
             )
             + "\n",
             encoding="utf-8",
         )
-        (evidence_dir / "logs.jsonl").write_text("", encoding="utf-8")
+        (evidence_dir / "logs.jsonl").write_text(
+            json.dumps(
+                {
+                    "evidence_id": "log-aiops-temp-aiops-oom-business-elasticsearch",
+                    "source_system": "elasticsearch",
+                    "dimension": "logs",
+                    "summary": "business allocation logs",
+                    "payload": {
+                        "samples": [
+                            {
+                                "timestamp": "2026-07-08T05:00:00Z",
+                                "message": "trace_id=abc123 span_id=span01 allocated_mib=50",
+                                "container": "business-api",
+                            }
+                        ]
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (evidence_dir / "deepflow_l4.jsonl").write_text("", encoding="utf-8")
-        (evidence_dir / "deepflow_l7.jsonl").write_text("", encoding="utf-8")
+        (evidence_dir / "deepflow_l7.jsonl").write_text(
+            json.dumps(
+                {
+                    "evidence_id": "deepflow-aiops-temp-aiops-oom-business-pod-ip-flow",
+                    "source_system": "deepflow",
+                    "dimension": "tracing",
+                    "summary": "real HTTP flow",
+                    "payload": {
+                        "samples": [
+                            {
+                                "timestamp": "2026-07-08T05:00:00Z",
+                                "src": "10.244.0.20",
+                                "dst": "10.244.0.10",
+                                "protocol": "HTTP",
+                                "request": "GET /allocate?mib=2",
+                                "response_code": 200,
+                                "duration_us": 1820,
+                                "trace_id": "abc123",
+                                "span_id": "span01",
+                            }
+                        ]
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (evidence_dir / "tempo_traces.jsonl").write_text(
+            json.dumps(
+                {
+                    "evidence_id": "tempo-aiops-temp-aiops-oom-business-spans",
+                    "source_system": "tempo",
+                    "dimension": "trace",
+                    "summary": "real OTLP span",
+                    "payload": {
+                        "spans": [
+                            {
+                                "trace_id": "abc123",
+                                "service": "aiops-oom-business",
+                                "name": "GET /allocate",
+                                "start": "2026-07-08T05:00:00Z",
+                                "end": "2026-07-08T05:00:00.001820Z",
+                                "attributes": {"aiops.allocated_mib.after": 50},
+                            }
+                        ]
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (evidence_dir / "k8s_describe.txt").write_text("Last State: OOMKilled", encoding="utf-8")
         (evidence_dir / "k8s_pod.yaml").write_text("kind: Pod\n", encoding="utf-8")
         return case_dir
@@ -135,12 +267,119 @@ recommended_refs_by_dimension:
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["case_id"], "oomkilled-aiops-temp-aiops-oom-business")
             self.assertEqual(payload["coverage"]["metrics"], "present")
-            self.assertEqual(payload["topology_summary"]["directness"]["direct"], 1)
+            self.assertEqual(payload["topology_summary"]["directness"]["direct"], 2)
             self.assertEqual(payload["recommended_refs_by_dimension"]["metrics"], ["metric-aiops-temp-aiops-oom-business-prometheus"])
+            details = payload["dimension_details"]
+            self.assertEqual(details["metrics"]["highlights"][0]["max"], "63.2Mi")
+            self.assertEqual(details["logs"]["samples"][0]["container"], "business-api")
+            self.assertIn("allocated_mib=50", details["logs"]["samples"][0]["message"])
+            self.assertEqual(details["tracing"]["flows"][0]["request"], "GET /allocate?mib=2")
+            self.assertEqual(details["tracing"]["spans"][0]["attributes"]["aiops.allocated_mib.after"], 50)
+            self.assertEqual(details["topology"]["edges"][0]["relationship"], "Service --selects--> Pod")
+            self.assertTrue(details["metrics"]["highlights"][0]["evidence_ref"])
+            self.assertTrue(details["logs"]["samples"][0]["evidence_ref"])
+            self.assertTrue(details["tracing"]["flows"][0]["evidence_ref"])
+            self.assertLessEqual(len(json.dumps(details, ensure_ascii=False)), 6000)
             rendered = json.dumps(payload, ensure_ascii=False)
             self.assertNotIn("root_cause_label", rendered)
             self.assertNotIn("expected_remediation", rendered)
             self.assertNotIn("should_not_leak", rendered)
+
+    def test_dimension_details_budget_trims_large_log_payloads(self):
+        details = {
+            "metrics": {"coverage": "present", "highlights": []},
+            "logs": {
+                "coverage": "present",
+                "samples": [
+                    {
+                        "timestamp": "2026-07-13T00:00:00Z",
+                        "message": "x" * 2000,
+                        "container": "business-api",
+                        "evidence_ref": "log-ref",
+                    }
+                    for _ in range(8)
+                ],
+            },
+            "tracing": {"coverage": "empty", "flows": [], "spans": [], "call_chains": []},
+            "topology": {"coverage": "present", "entities": [], "edges": []},
+        }
+
+        bounded = _fit_dimension_details(details, max_chars=6000)
+
+        self.assertLessEqual(len(json.dumps(bounded, ensure_ascii=False)), 6000)
+        self.assertTrue(bounded["logs"]["samples"])
+        self.assertIn("message", bounded["logs"]["samples"][0])
+
+    def test_log_samples_prioritize_previous_high_watermark_before_restart_startup(self):
+        samples = [
+            {
+                "message": '{"event":"allocate","allocated_mib":2}',
+                "evidence_ref": "log-current",
+                "role": "target",
+            },
+            {
+                "message": '{"event":"allocate","allocated_mib":62}',
+                "evidence_ref": "log-previous",
+                "role": "target",
+            },
+            {
+                "message": '{"event":"request_succeeded","allocated_mib":40}',
+                "evidence_ref": "caller-log",
+                "role": "request_driver",
+            },
+        ]
+
+        ranked = _rank_log_samples(samples)
+
+        self.assertEqual(ranked[0]["evidence_ref"], "log-previous")
+        self.assertIn('"allocated_mib":62', ranked[0]["message"])
+
+    def test_write_package_persists_caller_logs_as_agent_visible_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            case_dir = Path(temp) / "case"
+            caller = SourceResult(
+                "elasticsearch",
+                "caller_logs",
+                "present",
+                records=[{"message": "request_succeeded trace_id=abc"}],
+                evidence=[
+                    EvidenceItem(
+                        evidence_id="caller-log-ns-driver",
+                        source_system="elasticsearch",
+                        dimension="caller_logs",
+                        summary="caller request",
+                        payload={
+                            "samples": [
+                                {
+                                    "message": "request_succeeded trace_id=abc",
+                                    "container": "driver",
+                                }
+                            ]
+                        },
+                    )
+                ],
+                query_meta={"caller_pod": "ns/driver", "caller_ip": "10.0.0.10"},
+            )
+
+            _write_package(
+                case_dir,
+                "case",
+                "auto",
+                {
+                    "kind": "Pod",
+                    "namespace": "ns",
+                    "name": "api",
+                    "uid": "uid",
+                    "pod_ip": "10.0.0.20",
+                    "node": "node1",
+                },
+                {"start": "2026-07-13T00:00:00Z", "end": "2026-07-13T00:30:00Z"},
+                [caller],
+            )
+
+            persisted = (case_dir / "evidence" / "logs.jsonl").read_text(encoding="utf-8")
+            self.assertIn("caller-log-ns-driver", persisted)
+            self.assertIn('"dimension": "caller_logs"', persisted)
 
     def test_get_aiops_case_evidence_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -226,6 +465,114 @@ recommended_refs_by_dimension:
         )
 
         self.assertEqual(_infer_abnormal_type([source]), "imagepullbackoff")
+
+    def test_infers_crashloopbackoff_from_full_k8s_event_payload_during_restart_race(self):
+        source = SourceResult(
+            "kubernetes",
+            "k8s",
+            "present",
+            records=[
+                {
+                    "container_statuses": [
+                        {
+                            "restartCount": 4,
+                            "state": {"running": {"startedAt": "2026-07-13T06:48:00Z"}},
+                            "lastState": {
+                                "terminated": {
+                                    "reason": "Error",
+                                    "exitCode": 78,
+                                }
+                            },
+                        }
+                    ],
+                    "last_terminated": [
+                        {
+                            "container": "business-api",
+                            "reason": "Error",
+                            "exitCode": 78,
+                        }
+                    ],
+                }
+            ],
+            evidence=[
+                EvidenceItem(
+                    evidence_id="k8s-event",
+                    source_system="kubernetes",
+                    dimension="k8s",
+                    summary="Normal Started container business-api",
+                    payload={
+                        "events_preview": (
+                            "Warning BackOff Back-off restarting failed container "
+                            "business-api"
+                        )
+                    },
+                )
+            ],
+        )
+
+        self.assertEqual(_infer_abnormal_type([source]), "crashloopbackoff")
+
+    def test_log_ranking_prefers_diagnostic_json_over_unavailable_previous_log(self):
+        samples = [
+            {
+                "message": (
+                    "unable to retrieve container logs for "
+                    "containerd://deadbeef"
+                ),
+                "role": "target",
+                "evidence_ref": "log-pod-previous",
+            },
+            {
+                "message": json.dumps(
+                    {
+                        "event": "config_missing",
+                        "error_code": "CONFIG_MISSING",
+                        "http_status": 500,
+                        "trace_id": "abc123",
+                    }
+                ),
+                "role": "target",
+                "evidence_ref": "log-pod-elasticsearch",
+            },
+        ]
+
+        ranked = _rank_log_samples(samples)
+
+        self.assertIn("CONFIG_MISSING", ranked[0]["message"])
+        self.assertIn("unable to retrieve", ranked[-1]["message"])
+
+    def test_correlated_samples_prefer_same_trace_across_logs_deepflow_and_tempo(self):
+        logs = [
+            {
+                "message": json.dumps({"event": "config_missing", "trace_id": "log-only"}),
+                "source_system": "kubernetes",
+                "role": "target",
+                "evidence_ref": "log-previous",
+            },
+            {
+                "message": json.dumps({"event": "config_missing", "trace_id": "shared-trace"}),
+                "source_system": "elasticsearch",
+                "role": "target",
+                "evidence_ref": "log-elasticsearch",
+            },
+        ]
+        flows = [
+            {"trace_id": "shared-trace", "request": "GET /checkout?order_id=42"},
+        ]
+        spans = [
+            {"trace_id": "shared-trace", "name": "GET /checkout"},
+        ]
+
+        aligned_logs, aligned_flows, aligned_spans = _align_correlated_samples(
+            logs,
+            flows,
+            spans,
+        )
+
+        self.assertEqual(aligned_logs[0]["source_system"], "elasticsearch")
+        self.assertIn("shared-trace", aligned_logs[0]["message"])
+        self.assertEqual(aligned_flows[0]["trace_id"], "shared-trace")
+        self.assertEqual(aligned_spans[0]["trace_id"], "shared-trace")
 
 
 if __name__ == "__main__":

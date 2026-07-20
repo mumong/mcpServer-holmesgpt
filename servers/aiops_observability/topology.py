@@ -18,6 +18,7 @@ def build_topology(
     evidence_refs_by_dimension: dict[str, list[str]],
     deepflow_coverage: str,
     deepflow_peers: list[str] | None = None,
+    resolved_callers: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     namespace = primary.get("namespace")
     pod_name = primary.get("name")
@@ -183,11 +184,44 @@ def build_topology(
             }
         )
 
-    # Network call topology from DeepFlow flows: peer IP communicates_with Pod (weak).
+    # A caller IP confirmed by DeepFlow and resolved through Kubernetes is a
+    # direct Pod-to-Pod call edge, not merely an anonymous network peer.
     tracing_refs = evidence_refs_by_dimension.get("tracing", [])[:5]
+    resolved_caller_ips: set[str] = set()
+    for caller in resolved_callers or []:
+        caller_namespace = str(caller.get("namespace") or "")
+        caller_pod = str(caller.get("pod") or "")
+        caller_ip = str(caller.get("pod_ip") or "")
+        if not caller_namespace or not caller_pod:
+            continue
+        caller_id = entity_id("pod", caller_namespace, caller_pod)
+        resolved_caller_ips.add(caller_ip)
+        entities.append(
+            {
+                "entity_id": caller_id,
+                "kind": "Pod",
+                "namespace": caller_namespace,
+                "name": caller_pod,
+                "attributes": {"pod_ip": caller_ip, "role": "request_driver"},
+                "evidence_refs": tracing_refs,
+            }
+        )
+        edges.append(
+            {
+                "source": caller_id,
+                "target": pod_id,
+                "relation": "calls",
+                "source_system": "deepflow+kubernetes",
+                "directness": "direct",
+                "confidence": "high",
+                "evidence_refs": tracing_refs,
+            }
+        )
+
+    # Unresolved network peers remain weak related context.
     seen_peers: set[str] = set()
     for peer_ip in (deepflow_peers or []):
-        if not peer_ip or peer_ip == pod_ip or peer_ip in seen_peers:
+        if not peer_ip or peer_ip == pod_ip or peer_ip in resolved_caller_ips or peer_ip in seen_peers:
             continue
         seen_peers.add(peer_ip)
         if len(seen_peers) > 10:
@@ -220,3 +254,70 @@ def summarize_topology(entities: list[dict[str, Any]], edges: list[dict[str, Any
         "confidence": dict(Counter(str(item.get("confidence", "unknown")) for item in edges)),
     }
 
+
+def topology_details(
+    entities: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    *,
+    max_entities: int = 12,
+    max_edges: int = 12,
+) -> dict[str, Any]:
+    entity_lookup = {
+        str(item.get("entity_id")): item
+        for item in entities
+        if item.get("entity_id")
+    }
+    entity_samples = [
+        {
+            "entity_id": item.get("entity_id"),
+            "kind": item.get("kind"),
+            "namespace": item.get("namespace"),
+            "name": item.get("name"),
+            "attributes": item.get("attributes") or {},
+            "evidence_refs": (item.get("evidence_refs") or [])[:5],
+        }
+        for item in entities[:max_entities]
+    ]
+    relation_priority = {
+        "calls": 0,
+        "selects": 1,
+        "owned_by": 2,
+        "observes": 3,
+        "scheduled_on": 4,
+        "assigned_to": 5,
+        "owns_container": 6,
+        "communicates_with": 7,
+    }
+    ranked_edges = [
+        edge
+        for _, edge in sorted(
+            enumerate(edges),
+            key=lambda item: (
+                relation_priority.get(str(item[1].get("relation") or ""), 99),
+                item[0],
+            ),
+        )
+    ]
+    edge_samples: list[dict[str, Any]] = []
+    for edge in ranked_edges[:max_edges]:
+        source = entity_lookup.get(str(edge.get("source")), {})
+        target = entity_lookup.get(str(edge.get("target")), {})
+        source_kind = str(source.get("kind") or "Entity")
+        target_kind = str(target.get("kind") or "Entity")
+        relation = str(edge.get("relation") or "related_to")
+        edge_samples.append(
+            {
+                "relationship": f"{source_kind} --{relation}--> {target_kind}",
+                "source": source.get("name") or edge.get("source"),
+                "target": target.get("name") or edge.get("target"),
+                "source_system": edge.get("source_system"),
+                "directness": edge.get("directness"),
+                "confidence": edge.get("confidence"),
+                "evidence_refs": (edge.get("evidence_refs") or [])[:5],
+            }
+        )
+    return {
+        "entities": entity_samples,
+        "edges": edge_samples,
+        "truncated": len(entities) > max_entities or len(edges) > max_edges,
+    }

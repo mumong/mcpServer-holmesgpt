@@ -146,7 +146,13 @@ def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
 TOOLS: List[Tool] = [
     Tool(
         name="collect_aiops_case",
-        description="Collect a live Kubernetes abnormal Pod case into an AIOps case package and return a compact agent-safe summary with evidence refs.",
+        description=(
+            "Preferred live diagnostic entrypoint for every known abnormal Kubernetes Pod. "
+            "Collects a compact evidence-first case with Kubernetes state, Prometheus metrics, "
+            "centralized logging, DeepFlow network tracing, Tempo application spans, and topology. "
+            "Use this before multiple kubectl-only calls; use fine-grained tools only when coverage "
+            "is absent, incomplete, or the collection returns an error."
+        ),
         inputSchema=_schema(
             {
                 "namespace": {"type": "string", "description": "Kubernetes namespace. Optional only when pod name is cluster-unique."},

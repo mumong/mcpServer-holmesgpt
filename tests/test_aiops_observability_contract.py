@@ -25,6 +25,7 @@ FR006_SUMMARY_FIELDS = [
     "evidence_inventory",
     "evidence_refs",
     "recommended_refs_by_dimension",
+    "dimension_details",
 ]
 
 FORBIDDEN_DATA_REFS = [
@@ -62,6 +63,20 @@ class CoarseContractTests(unittest.TestCase):
         )
         collect = next(t for t in aiops_case.TOOLS if t.name == "collect_aiops_case")
         self.assertEqual(collect.inputSchema["required"], ["pod"])  # namespace+pod primary, pod mandatory
+
+    def test_collect_aiops_case_description_marks_preferred_live_entrypoint(self):
+        collect = next(tool for tool in aiops_case.TOOLS if tool.name == "collect_aiops_case")
+        description = collect.description.lower()
+        for term in (
+            "preferred",
+            "prometheus",
+            "logging",
+            "deepflow",
+            "tempo",
+            "topology",
+            "abnormal kubernetes pod",
+        ):
+            self.assertIn(term, description)
 
     def test_get_aiops_case_summary_satisfies_fr006_contract(self):
         with tempfile.TemporaryDirectory() as temp:

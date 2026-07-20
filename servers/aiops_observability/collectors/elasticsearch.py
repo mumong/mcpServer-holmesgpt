@@ -74,6 +74,14 @@ def _parse_hits(payload: dict[str, Any], namespace: str, pod: str, max_records: 
     coverage = "present" if records else "empty"
     evidence = []
     if records:
+        samples = [
+            {
+                "timestamp": record.get("timestamp"),
+                "message": str(record.get("message") or "")[:1200],
+                "container": _container_name(record.get("kubernetes")),
+            }
+            for record in records[:8]
+        ]
         evidence.append(
             EvidenceItem(
                 evidence_id=evidence_id("log", namespace, pod, "elasticsearch"),
@@ -82,7 +90,7 @@ def _parse_hits(payload: dict[str, Any], namespace: str, pod: str, max_records: 
                 summary=f"Elasticsearch/Filebeat returned {len(records)} Pod log records（来源：{source_desc}）",
                 confidence="high",
                 directness="direct",
-                payload={"records": records[:10], "source": source_desc},
+                payload={"records": records[:10], "samples": samples, "source": source_desc},
             )
         )
     return SourceResult(
@@ -94,6 +102,17 @@ def _parse_hits(payload: dict[str, Any], namespace: str, pod: str, max_records: 
         query_meta={"source": source_desc, "matched": len(hits)},
         truncated=len(hits) > len(records),
     )
+
+
+def _container_name(kubernetes: Any) -> str | None:
+    if not isinstance(kubernetes, dict):
+        return None
+    container = kubernetes.get("container")
+    if isinstance(container, dict):
+        return container.get("name")
+    if isinstance(container, str):
+        return container
+    return kubernetes.get("container_name")
 
 
 def _collect_via_exec(
