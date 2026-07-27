@@ -51,8 +51,12 @@ data:
         enabled: true
         env:
           AIOPS_CASES_DIR: "/app/aiops-cases"
-          PROMETHEUS_URL: "http://observability-prometheus.xnet.svc:9090"
+          PROMETHEUS_URL: "http://observability-prometheus.monitor.svc:9090"
           DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+          AIOPS_ES_EXEC_NAMESPACE: "monitor"
+          AIOPS_ES_SECRET_NAMESPACE: "monitor"
+          AIOPS_CLICKHOUSE_EXEC_NAMESPACE: "monitor"
+          AIOPS_TEMPO_EXEC_NAMESPACE: "monitor"
 
       - name: aiops-observability-fine
         path: "servers/aiops_observability_fine_server.py"
@@ -60,8 +64,24 @@ data:
         enabled: true
         env:
           AIOPS_CASES_DIR: "/app/aiops-cases"
-          PROMETHEUS_URL: "http://observability-prometheus.xnet.svc:9090"
+          PROMETHEUS_URL: "http://observability-prometheus.monitor.svc:9090"
           DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+          AIOPS_ES_EXEC_NAMESPACE: "monitor"
+          AIOPS_ES_SECRET_NAMESPACE: "monitor"
+          AIOPS_CLICKHOUSE_EXEC_NAMESPACE: "monitor"
+          AIOPS_TEMPO_EXEC_NAMESPACE: "monitor"
+
+      - name: aiops-observability-query
+        path: "servers/aiops_observability_query_server.py"
+        port: 8100
+        enabled: true
+        env:
+          PROMETHEUS_URL: "http://observability-prometheus.monitor.svc:9090"
+          DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+          AIOPS_ES_EXEC_NAMESPACE: "monitor"
+          AIOPS_ES_SECRET_NAMESPACE: "monitor"
+          AIOPS_CLICKHOUSE_EXEC_NAMESPACE: "monitor"
+          AIOPS_TEMPO_EXEC_NAMESPACE: "monitor"
 
       - name: test-tools
         path: "servers/test_server.py"
@@ -92,7 +112,7 @@ data:
         port: 8095
         enabled: true
         env:
-          PROMETHEUS_URL: "http://observability-prometheus.xnet.svc:9090"
+          PROMETHEUS_URL: "http://observability-prometheus.monitor.svc:9090"
       
       - name: internet
         path: "servers/internet_server.py"

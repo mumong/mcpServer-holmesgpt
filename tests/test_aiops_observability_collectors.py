@@ -72,6 +72,84 @@ class KubernetesCollectorTests(unittest.TestCase):
         summaries = [e.summary for e in result.evidence]
         self.assertTrue(any("Last terminated" in s and "OOMKilled" in s for s in summaries))
 
+    def test_owner_chain_prefers_controller_reference(self):
+        pod_json = {
+            "metadata": {
+                "ownerReferences": [
+                    {
+                        "kind": "ConfigMap",
+                        "name": "fallback-owner",
+                        "uid": "fallback-uid",
+                        "controller": False,
+                    },
+                    {
+                        "kind": "ReplicaSet",
+                        "name": "controller-owner",
+                        "uid": "controller-uid",
+                        "controller": True,
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            kubernetes,
+            "_get_json_with_error",
+            return_value=({"metadata": {}}, None),
+        ) as fetch:
+            chain, status = kubernetes.resolve_owner_chain_with_status(
+                pod_json,
+                "ns",
+            )
+
+        self.assertEqual(chain[0]["kind"], "ReplicaSet")
+        self.assertEqual(chain[0]["name"], "controller-owner")
+        self.assertEqual(status["status"], "complete")
+        fetch.assert_called_once_with(
+            "replicaset",
+            "controller-owner",
+            "ns",
+            timeout=30,
+        )
+
+    def test_owner_and_service_lookup_errors_are_preserved(self):
+        pod_json = {
+            "metadata": {
+                "ownerReferences": [
+                    {
+                        "kind": "ReplicaSet",
+                        "name": "api-abc",
+                        "uid": "rs-uid",
+                        "controller": True,
+                    }
+                ]
+            }
+        }
+        with patch.object(
+            kubernetes,
+            "_get_json_with_error",
+            return_value=(None, "replicasets is forbidden"),
+        ):
+            chain, owner_status = kubernetes.resolve_owner_chain_with_status(
+                pod_json,
+                "ns",
+            )
+        with patch.object(
+            kubernetes,
+            "_run_kubectl",
+            return_value=(False, "services is forbidden"),
+        ):
+            services, service_status = kubernetes.matching_services_with_status(
+                "ns",
+                {"app": "api"},
+            )
+
+        self.assertEqual(chain[0]["name"], "api-abc")
+        self.assertEqual(owner_status["status"], "partial")
+        self.assertIn("forbidden", owner_status["error"])
+        self.assertEqual(services, [])
+        self.assertEqual(service_status["status"], "error")
+        self.assertIn("forbidden", service_status["error"])
+
 
 class PrometheusCollectorTests(unittest.TestCase):
     def test_memory_highlights_filter_pause_and_deduplicate_scrapers(self):
@@ -637,6 +715,54 @@ class SignalsAndTempoTests(unittest.TestCase):
             r = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=["t1"], timeout=5)
         self.assertEqual(r.coverage, "present")
         self.assertIn("span", r.evidence[0].summary.lower())
+
+    def test_tempo_reports_backend_failure_instead_of_empty(self):
+        import os
+        from servers.aiops_observability.collectors import tempo
+        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
+             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
+             patch.object(
+                 tempo._kube,
+                 "exec_in_pod",
+                 return_value=(False, "", "connection refused"),
+             ):
+            result = tempo.collect_tempo(
+                namespace="ns",
+                pod="p",
+                trace_ids=["0123456789abcdef0123456789abcdef"],
+                timeout=5,
+            )
+
+        self.assertEqual(result.coverage, "error")
+        self.assertIn("connection refused", result.error or "")
+
+    def test_tempo_preserves_partial_failure_with_successful_empty_lookup(self):
+        import os
+        from servers.aiops_observability.collectors import tempo
+        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
+             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
+             patch.object(
+                 tempo._kube,
+                 "exec_in_pod",
+                 side_effect=[
+                     (False, "", "connection refused"),
+                     (True, json.dumps({"batches": []}), ""),
+                 ],
+             ):
+            result = tempo.collect_tempo(
+                namespace="ns",
+                pod="p",
+                trace_ids=[
+                    "0123456789abcdef0123456789abcdef",
+                    "fedcba9876543210fedcba9876543210",
+                ],
+                timeout=5,
+            )
+
+        self.assertEqual(result.coverage, "weak")
+        self.assertIn("connection refused", result.error or "")
+        self.assertEqual(result.query_meta["failed_trace_count"], 1)
+        self.assertEqual(result.query_meta["successful_lookup_count"], 1)
 
     def test_tempo_evidence_contains_at_most_three_readable_span_samples(self):
         import os

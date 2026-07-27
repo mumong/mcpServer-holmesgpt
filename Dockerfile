@@ -59,7 +59,7 @@ COPY servers/ ./servers/
 ENV MCP_CONFIG_PATH=/app/config/mcp_config.yaml
 
 # 暴露端口范围
-EXPOSE 8080-8099
+EXPOSE 8080-8100
 
 # 启动命令
 CMD ["python", "start.py", "--config", "/app/config/mcp_config.yaml"]

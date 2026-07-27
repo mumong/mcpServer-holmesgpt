@@ -38,25 +38,64 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
         )
     found: list[dict[str, Any]] = []
     span_samples: list[dict[str, Any]] = []
+    successful_lookups = 0
+    failures: list[str] = []
     for tid in ids:
         url = f"{cfg.tempo_local_url.rstrip('/')}/api/traces/{tid}"
-        ok, out, _ = _kube.exec_in_pod(cfg.tempo_exec_namespace, tempo_pod, ["curl", "-s", url], timeout=timeout)
-        if not ok or not out.strip():
+        ok, out, error = _kube.exec_in_pod(
+            cfg.tempo_exec_namespace,
+            tempo_pod,
+            ["curl", "-s", url],
+            timeout=timeout,
+        )
+        if not ok:
+            failures.append(str(error or out or f"Tempo query failed for {tid}"))
+            continue
+        if not out.strip():
+            failures.append(f"Tempo returned an empty response for {tid}")
             continue
         try:
             payload = json.loads(out)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            failures.append(f"Tempo returned invalid JSON for {tid}: {exc}")
             continue
+        successful_lookups += 1
         extracted = _extract_spans(payload, fallback_trace_id=tid)
         span_count = len(extracted)
         if span_count > 0:
             found.append({"trace_id": tid, "span_count": span_count})
             span_samples.extend(extracted[: max(0, 3 - len(span_samples))])
     if not found:
+        if failures and successful_lookups == 0:
+            return SourceResult(
+                "tempo",
+                "trace",
+                "error",
+                error="; ".join(failures[:3]),
+                query_meta={"queried_trace_ids": ids, "tempo_pod": tempo_pod},
+            )
+        if failures:
+            return SourceResult(
+                "tempo",
+                "trace",
+                "weak",
+                error="; ".join(failures[:3]),
+                query_meta={
+                    "queried_trace_ids": ids,
+                    "tempo_pod": tempo_pod,
+                    "failed_trace_count": len(failures),
+                    "successful_lookup_count": successful_lookups,
+                },
+            )
         return SourceResult(
             "tempo", "trace", "empty",
             error=f"Tempo 中未找到这些 trace 的 span（查询了 {len(ids)} 个 trace_id）",
-            query_meta={"queried_trace_ids": ids, "tempo_pod": tempo_pod},
+            query_meta={
+                "queried_trace_ids": ids,
+                "tempo_pod": tempo_pod,
+                "failed_trace_count": 0,
+                "successful_lookup_count": successful_lookups,
+            },
         )
     trace_list = ", ".join(t["trace_id"] for t in found)
     evidence = [
@@ -76,10 +115,16 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
         )
     ]
     return SourceResult(
-        "tempo", "trace", "present",
+        "tempo", "trace", "weak" if failures else "present",
         records=found,
         evidence=evidence,
-        query_meta={"queried_trace_ids": ids, "tempo_pod": tempo_pod},
+        query_meta={
+            "queried_trace_ids": ids,
+            "tempo_pod": tempo_pod,
+            "failed_trace_count": len(failures),
+            "successful_lookup_count": successful_lookups,
+        },
+        error="; ".join(failures[:3]) if failures else None,
     )
 
 

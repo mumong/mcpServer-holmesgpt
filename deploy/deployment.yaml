@@ -33,6 +33,8 @@ spec:
               containerPort: 8089
             - name: aiops-fine
               containerPort: 8090
+            - name: aiops-query
+              containerPort: 8100
             - name: test-mcp
               containerPort: 8091
             - name: helm-mcp

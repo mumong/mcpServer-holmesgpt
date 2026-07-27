@@ -20,6 +20,9 @@ spec:
     - name: aiops-fine
       port: 8090
       targetPort: 8090
+    - name: aiops-query
+      port: 8100
+      targetPort: 8100
     - name: test-mcp
       port: 8091
       targetPort: 8091

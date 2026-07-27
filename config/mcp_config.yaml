@@ -68,6 +68,14 @@ basicmcp:
       PROMETHEUS_URL: "http://localhost:9090"
       DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
 
+  - name: aiops-observability-query
+    path: "servers/aiops_observability_query_server.py"
+    port: 8100
+    enabled: false
+    env:
+      PROMETHEUS_URL: "http://localhost:9090"
+      DEEPFLOW_CLICKHOUSE_DATABASE: "flow_log"
+
   - name: test-tools
     path: "servers/test_server.py"
     port: 8091

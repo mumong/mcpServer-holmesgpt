@@ -39,20 +39,47 @@ def get_pod(namespace: str, pod: str, timeout: int = 30) -> tuple[dict[str, Any]
         return None, f"invalid pod json: {exc}"
 
 
-def _get_json(kind: str, name: str, namespace: str, timeout: int = 30) -> dict[str, Any] | None:
+def _get_json_with_error(
+    kind: str,
+    name: str,
+    namespace: str,
+    timeout: int = 30,
+) -> tuple[dict[str, Any] | None, str | None]:
     args = ["get", kind, name, "-o", "json"]
     if namespace:
         args.extend(["-n", namespace])
     ok, out = _run_kubectl(args, timeout=timeout)
     if not ok:
-        return None
+        return None, out or f"failed to get {kind} {namespace}/{name}"
     try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return None
+        payload = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return None, f"invalid {kind} json: {exc}"
+    if not isinstance(payload, dict):
+        return None, f"invalid {kind} json: expected an object"
+    return payload, None
 
 
-def resolve_owner_chain(pod_json: dict[str, Any], namespace: str, timeout: int = 30) -> list[dict[str, Any]]:
+def _get_json(
+    kind: str,
+    name: str,
+    namespace: str,
+    timeout: int = 30,
+) -> dict[str, Any] | None:
+    payload, _ = _get_json_with_error(
+        kind,
+        name,
+        namespace,
+        timeout=timeout,
+    )
+    return payload
+
+
+def resolve_owner_chain_with_status(
+    pod_json: dict[str, Any],
+    namespace: str,
+    timeout: int = 30,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Walk ownerReferences upward: Pod -> ReplicaSet -> Deployment (best effort, bounded)."""
     chain: list[dict[str, Any]] = []
     obj = pod_json
@@ -60,34 +87,98 @@ def resolve_owner_chain(pod_json: dict[str, Any], namespace: str, timeout: int =
     for _ in range(4):
         owners = (obj.get("metadata", {}) or {}).get("ownerReferences") or []
         if not owners:
-            break
-        owner = owners[0]
+            return chain, {
+                "status": "complete" if chain else "empty",
+            }
+        owner = next(
+            (
+                item
+                for item in owners
+                if isinstance(item, dict) and item.get("controller") is True
+            ),
+            owners[0],
+        )
+        if not isinstance(owner, dict):
+            return chain, {
+                "status": "partial" if chain else "error",
+                "error": "ownerReferences contains a non-object entry",
+            }
         kind = owner.get("kind")
         name = owner.get("name")
         if not kind or not name or (kind, name) in seen:
-            break
+            return chain, {
+                "status": "partial" if chain else "error",
+                "error": "ownerReferences contains an invalid or cyclic owner",
+            }
         seen.add((kind, name))
-        chain.append({"kind": kind, "name": name})
-        nxt = _get_json(str(kind).lower(), str(name), namespace, timeout=timeout)
-        if nxt is None:
-            break
+        chain.append({"kind": kind, "name": name, "uid": owner.get("uid")})
+        nxt, error = _get_json_with_error(
+            str(kind).lower(),
+            str(name),
+            namespace,
+            timeout=timeout,
+        )
+        if error or nxt is None:
+            return chain, {
+                "status": "partial",
+                "error": str(
+                    error
+                    or f"failed to fetch {kind} {namespace}/{name}"
+                ),
+            }
         obj = nxt
+    remaining = (obj.get("metadata", {}) or {}).get("ownerReferences") or []
+    if remaining:
+        return chain, {
+            "status": "partial",
+            "error": "owner chain exceeded the four-level lookup limit",
+        }
+    return chain, {"status": "complete"}
+
+
+def resolve_owner_chain(
+    pod_json: dict[str, Any],
+    namespace: str,
+    timeout: int = 30,
+) -> list[dict[str, Any]]:
+    chain, _ = resolve_owner_chain_with_status(
+        pod_json,
+        namespace,
+        timeout=timeout,
+    )
     return chain
 
 
-def matching_services(namespace: str, pod_labels: dict[str, Any], timeout: int = 30) -> list[dict[str, Any]]:
+def matching_services_with_status(
+    namespace: str,
+    pod_labels: dict[str, Any],
+    timeout: int = 30,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Find Services in the namespace whose non-empty selector is satisfied by the Pod labels."""
     if not namespace or not pod_labels:
-        return []
+        return [], {"status": "empty"}
     ok, out = _run_kubectl(["get", "svc", "-n", namespace, "-o", "json"], timeout=timeout)
     if not ok:
-        return []
+        return [], {
+            "status": "error",
+            "error": out or f"failed to list Services in namespace {namespace}",
+        }
     try:
         payload = json.loads(out)
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as exc:
+        return [], {
+            "status": "error",
+            "error": f"invalid Service list json: {exc}",
+        }
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return [], {
+            "status": "error",
+            "error": "invalid Service list json: items must be an array",
+        }
     result: list[dict[str, Any]] = []
     for svc in payload.get("items", []) or []:
+        if not isinstance(svc, dict):
+            continue
         selector = ((svc.get("spec", {}) or {}).get("selector")) or {}
         if not selector:
             continue
@@ -96,12 +187,26 @@ def matching_services(namespace: str, pod_labels: dict[str, Any], timeout: int =
             result.append(
                 {
                     "name": (svc.get("metadata", {}) or {}).get("name"),
+                    "uid": (svc.get("metadata", {}) or {}).get("uid"),
                     "selector": selector,
                     "cluster_ip": spec.get("clusterIP"),
                     "ports": [{"port": p.get("port"), "targetPort": p.get("targetPort")} for p in (spec.get("ports") or [])],
                 }
             )
-    return result
+    return result, {"status": "complete" if result else "empty"}
+
+
+def matching_services(
+    namespace: str,
+    pod_labels: dict[str, Any],
+    timeout: int = 30,
+) -> list[dict[str, Any]]:
+    services, _ = matching_services_with_status(
+        namespace,
+        pod_labels,
+        timeout=timeout,
+    )
+    return services
 
 
 def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 120) -> SourceResult:
@@ -250,4 +355,3 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
             "previous_logs": prev_logs,
         },
     )
-
