@@ -12,12 +12,14 @@
 
 ## AIOps 可观测 MCP
 
-本项目内置两个 AIOps 可观测 MCP server：
+本项目内置三个 AIOps 可观测 MCP server：
 
-- `aiops-case`，端口 `8089`：粗粒度 case 工具，默认给 Robusta Agent 主流程使用。
+- `aiops-case`，端口 `8089`：粗粒度 case package 采集与按引用读取。
 - `aiops-observability-fine`，端口 `8090`：细粒度 Pod 级观测工具，默认在 Robusta 中关闭，调试/专家模式按需开启。
+- `aiops-observability-query`，端口 `8100`：当前 Robusta 默认使用的自主 Pod 查询工具，原生返回 canonical Fact Ledger。
 
-生产运行时不依赖 `data` 目录，也不调用 `../data/scripts/collect_case.py`。case package 默认写入：
+8100 自主查询路径的生产运行不依赖 `data` 目录。`aiops-case` 仍是可选的
+case package 路径，默认写入：
 
 ```bash
 AIOPS_CASES_DIR=/app/aiops-cases
@@ -45,6 +47,20 @@ build_aiops_topology(namespace, pod, window?)
 
 细粒度工具仍然是 Pod 级、时间窗口受控、结构化返回；第一版不让模型直接传任意 PromQL、ES DSL 或 ClickHouse SQL。
 
+### 自主查询工具
+
+```text
+execute_pod_promql(namespace, pod, purpose, promql, query_type, ...)
+query_pod_logs(namespace, pod, purpose, ...)
+query_pod_tracing(namespace, pod, purpose, ...)
+query_pod_topology(namespace, pod, purpose, ...)
+```
+
+模型选择查询条件，工具负责精确 Pod 作用域、时间窗、返回预算和来源证据。
+最终结果不超过 6144 bytes，并从同一有界结果确定性构建
+`aiops.fact-ledger.v1`。Fact ID、排序和裁剪在相同输入下稳定；Ledger 只描述数据源
+事实，不携带诊断答案或修复指令。
+
 ### OOMKilled 测试 Pod
 
 部署：
@@ -70,7 +86,12 @@ kubectl delete -f deploy/examples/aiops-oom-business.yaml
 本地测试：
 
 ```bash
-python -m unittest tests.test_aiops_case_tool tests.test_aiops_observability_fine tests.test_aiops_case_deploy -v
+python -m unittest \
+  tests.test_aiops_case_tool \
+  tests.test_aiops_observability_fine \
+  tests.test_aiops_observability_query_fact_ledger \
+  tests.test_aiops_observability_query_contract \
+  tests.test_aiops_case_deploy -v
 ```
 
 ---

@@ -28,3 +28,6 @@ config/mcp_config.local.yaml
 
 # Logs
 *.log
+
+# Local agent/review artifacts
+agent-loop/

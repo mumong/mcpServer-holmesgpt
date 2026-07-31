@@ -50,6 +50,7 @@ mcpstander/
 │   └── rbac.yaml
 ├── scripts/run-local.sh
 ├── docs/EXTENDING.md              # 添加新 MCP 的详细指南
+├── docs/AIOPS_OBSERVABILITY_QUERY.md # Pod 查询与 canonical Fact Ledger 合同
 ├── Dockerfile
 ├── Makefile
 └── requirements.txt
@@ -74,12 +75,33 @@ mcpstander/
 | `connectivity_check` | 8097 | 本地 Python MCP | TCP 连通性检查 |
 | `core-investigation` | 8098 | 本地 Python MCP | 调查任务规划工具 |
 | `runbook` | 8099 | 本地 Python MCP | Runbook 搜索与读取 |
+| `aiops-observability-query` | 8100 | 本地 Python MCP | 通用 Pod 级 Metrics / Logging / Tracing / Topology 查询，原生发布 canonical Fact Ledger |
 
 本地配置 `config/mcp_config.yaml` 可以与 K8s 部署端口不同，实际运行时请以当前使用的配置文件为准：
 
 ```bash
 python3 start.py --list
 ```
+
+### AIOps 自主查询与 Fact Ledger
+
+`aiops-observability-query` 通过 `8100/sse` 暴露四个通用工具：
+
+```text
+execute_pod_promql
+query_pod_logs
+query_pod_tracing
+query_pod_topology
+```
+
+工具不按故障类型路由。每个结果都绑定精确 namespace、Pod 和可选 Pod
+UID，并在最终 6144-byte 有界投影上构建
+`aiops.fact-ledger.v1`。canonical Ledger 使用 `source=mcp_canonical`、
+`legacy_contract=false`，只发布数据源事实、coverage 和 evidence refs，不包含
+diagnosis、root cause、remediation 或 evaluator label。
+
+详细合同、边界和测试方式见
+[`docs/AIOPS_OBSERVABILITY_QUERY.md`](docs/AIOPS_OBSERVABILITY_QUERY.md)。
 
 ---
 
@@ -259,6 +281,13 @@ mcp_servers:
     description: "Kubernetes MCP - 查询资源、事件、日志和实时指标"
     config:
       url: "http://mcp-server-manager.mcp:8093/sse"
+      mode: "sse"
+    enabled: true
+
+  aiops-observability-query:
+    description: "Pod-scoped observability queries with canonical Fact Ledger"
+    config:
+      url: "http://mcp-server-manager.mcp:8100/sse"
       mode: "sse"
     enabled: true
 ```
