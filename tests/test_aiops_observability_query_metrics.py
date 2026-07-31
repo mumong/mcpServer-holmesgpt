@@ -475,13 +475,338 @@ class MetricsResultTests(unittest.TestCase):
             },
         )
 
-    def test_range_query_rejects_explicit_start_before_pod_creation(self):
+    def test_range_query_preserves_raw_offset_request_and_executes_utc_window(self):
         entity = {
             "kind": "Pod",
             "namespace": "ns",
             "pod": "pod",
             "pod_uid": "uid-1",
-            "creation_timestamp": "2026-07-23T10:10:00Z",
+            "creation_timestamp": "2026-07-21T00:00:00Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "preserve the caller time zone provenance",
+                    "promql": promql,
+                    "query_type": "range",
+                    "start": "2026-07-23T18:00:00+08:00",
+                    "end": "2026-07-23T18:20:00+08:00",
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {
+                "start": "2026-07-23T18:00:00+08:00",
+                "end": "2026-07-23T18:20:00+08:00",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
+            {
+                "start": "2026-07-23T10:00:00Z",
+                "end": "2026-07-23T10:20:00Z",
+            },
+        )
+        self.assertNotIn("time_range_adjustment", result["query"])
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": promql,
+                "start": "2026-07-23T10:00:00Z",
+                "end": "2026-07-23T10:20:00Z",
+                "step": "1m",
+            },
+        )
+
+    def test_range_query_interprets_relative_start_as_recent_lookback(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "inspect the most recent hour",
+                    "promql": promql,
+                    "query_type": "range",
+                    "start": "1h",
+                    "window_minutes": 30,
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["query"]["promql"], promql)
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {"start": "1h"},
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
+            {
+                "start": "2026-07-23T11:00:00Z",
+                "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "relative_lookback",
+                "action": "converted_duration_to_bounded_window",
+            },
+        )
+        self.assertEqual(
+            result["query"]["pod_creation_timestamp"],
+            "2026-07-23T07:25:45Z",
+        )
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": promql,
+                "start": "2026-07-23T11:00:00Z",
+                "end": "2026-07-23T12:00:00Z",
+                "step": "1m",
+            },
+        )
+
+    def test_range_query_replaces_future_window_with_current_bounded_window(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "recover a future model-generated range",
+                    "promql": promql,
+                    "query_type": "range",
+                    "start": "2026-07-23T13:00:00Z",
+                    "end": "2026-07-23T14:00:00Z",
+                    "window_minutes": 45,
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["query"]["promql"], promql)
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {
+                "start": "2026-07-23T13:00:00Z",
+                "end": "2026-07-23T14:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
+            {
+                "start": "2026-07-23T11:15:00Z",
+                "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "future_time_range",
+                "action": "replaced_with_current_bounded_window",
+            },
+        )
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": promql,
+                "start": "2026-07-23T11:15:00Z",
+                "end": "2026-07-23T12:00:00Z",
+                "step": "1m",
+            },
+        )
+
+    def test_range_query_replaces_reversed_window_with_current_bounded_window(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "recover a reversed model-generated range",
+                    "promql": promql,
+                    "query_type": "range",
+                    "start": "2026-07-23T10:30:00Z",
+                    "end": "2026-07-23T10:00:00Z",
+                    "window_minutes": 20,
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["query"]["promql"], promql)
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {
+                "start": "2026-07-23T10:30:00Z",
+                "end": "2026-07-23T10:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
+            {
+                "start": "2026-07-23T11:40:00Z",
+                "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "reversed_time_range",
+                "action": "replaced_with_current_bounded_window",
+            },
+        )
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": promql,
+                "start": "2026-07-23T11:40:00Z",
+                "end": "2026-07-23T12:00:00Z",
+                "step": "1m",
+            },
+        )
+
+    def test_range_query_keeps_unrecognized_start_invalid(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
             "pod_ip": "10.0.0.8",
             "node": "node1",
             "containers": ["api"],
@@ -494,31 +819,428 @@ class MetricsResultTests(unittest.TestCase):
                 {
                     "namespace": "ns",
                     "pod": "pod",
-                    "purpose": "reject a range from a previous pod incarnation",
+                    "purpose": "reject an unrecognized time expression",
                     "promql": 'up{namespace="ns",pod="pod"}',
                     "query_type": "range",
-                    "start": "2026-07-23T10:00:00Z",
-                    "end": "2026-07-23T10:20:00Z",
+                    "start": "sometime-recently",
                     "step": "1m",
                 }
             )
 
         self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "invalid_time_range")
         self.assertEqual(
-            result["error"]["code"],
-            "range_precedes_pod_lifecycle",
+            result["query"]["requested_time_range"],
+            {"start": "sometime-recently"},
         )
-        self.assertIn("current Pod creation", result["error"]["message"])
+        backend.assert_not_called()
+
+    def test_range_query_rejects_relative_lookback_over_two_hours(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        with (
+            patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(metrics, "_request_prometheus") as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "reject an oversized relative lookback",
+                    "promql": 'up{namespace="ns",pod="pod"}',
+                    "query_type": "range",
+                    "start": "3h",
+                    "step": "1m",
+                }
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "range_too_large")
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {"start": "3h"},
+        )
+        backend.assert_not_called()
+
+    def test_range_query_rejects_sub_microsecond_lookback_after_rounding(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-21T00:00:00Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        with (
+            patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(metrics, "_request_prometheus") as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "reject a lookback rounded to zero duration",
+                    "promql": 'up{namespace="ns",pod="pod"}',
+                    "query_type": "range",
+                    "start": "0.0001ms",
+                    "step": "1m",
+                }
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "invalid_time_range")
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {"start": "0.0001ms"},
+        )
+        self.assertNotIn("time_range", result["query"])
+        backend.assert_not_called()
+
+    def test_range_query_rejects_naive_absolute_window_with_provenance(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-21T00:00:00Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        with (
+            patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
+            patch.object(metrics, "_request_prometheus") as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "reject host-timezone-dependent timestamps",
+                    "promql": 'up{namespace="ns",pod="pod"}',
+                    "query_type": "range",
+                    "start": "2026-07-23T10:00:00",
+                    "end": "2026-07-23T10:20:00",
+                    "step": "1m",
+                }
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "invalid_time_range")
         self.assertEqual(
             result["query"]["requested_time_range"],
             {
-                "start": "2026-07-23T10:00:00Z",
-                "end": "2026-07-23T10:20:00Z",
+                "start": "2026-07-23T10:00:00",
+                "end": "2026-07-23T10:20:00",
+            },
+        )
+        backend.assert_not_called()
+
+    def test_range_window_normalizes_window_minutes_boundaries(self):
+        expected = {
+            "start": "2026-07-23T11:59:00Z",
+            "end": "2026-07-23T12:00:00Z",
+        }
+        with patch(
+            "servers.aiops_observability.schemas.utc_now",
+            return_value=datetime(
+                2026,
+                7,
+                23,
+                12,
+                0,
+                tzinfo=timezone.utc,
+            ),
+        ):
+            for window_minutes in (0, -5):
+                with self.subTest(window_minutes=window_minutes):
+                    window, requested, adjustment, error = (
+                        metrics._range_window(
+                            {"window_minutes": window_minutes},
+                            not_before=None,
+                        )
+                    )
+                    self.assertEqual(window, expected)
+                    self.assertEqual(requested, {})
+                    self.assertIsNone(adjustment)
+                    self.assertIsNone(error)
+
+            try:
+                window, requested, adjustment, error = (
+                    metrics._range_window(
+                        {"window_minutes": 10**400},
+                        not_before=None,
+                    )
+                )
+            except OverflowError as exc:
+                self.fail(f"window_minutes overflow escaped normalization: {exc}")
+
+        self.assertIsNone(window)
+        self.assertEqual(requested, {})
+        self.assertIsNone(adjustment)
+        self.assertEqual(error["code"], "invalid_time_range")
+
+    def test_range_query_recovers_fully_stale_explicit_window_with_current_lifecycle_window(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "inspect current pod memory",
+                    "promql": 'up{namespace="ns",pod="pod"}',
+                    "query_type": "range",
+                    "start": "2024-01-01T00:00:00Z",
+                    "end": "2024-01-01T01:00:00Z",
+                    "window_minutes": 60,
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {
+                "start": "2024-01-01T00:00:00Z",
+                "end": "2024-01-01T01:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
+            {
+                "start": "2026-07-23T11:00:00Z",
+                "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "range_precedes_pod_lifecycle",
+                "action": "replaced_with_current_bounded_window",
             },
         )
         self.assertEqual(
             result["query"]["pod_creation_timestamp"],
-            "2026-07-23T10:10:00Z",
+            "2026-07-23T07:25:45Z",
+        )
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": 'up{namespace="ns",pod="pod"}',
+                "start": "2026-07-23T11:00:00Z",
+                "end": "2026-07-23T12:00:00Z",
+                "step": "1m",
+            },
+        )
+
+    def test_fully_stale_range_normalizes_zero_and_negative_fallback_minutes(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        for window_minutes in (0, -5):
+            with self.subTest(window_minutes=window_minutes):
+                with (
+                    patch.object(
+                        metrics,
+                        "resolve_pod_scope",
+                        side_effect=[(entity, None), (entity, None)],
+                    ),
+                    patch(
+                        "servers.aiops_observability.schemas.utc_now",
+                        return_value=datetime(
+                            2026,
+                            7,
+                            23,
+                            12,
+                            0,
+                            tzinfo=timezone.utc,
+                        ),
+                    ),
+                    patch.object(
+                        metrics,
+                        "_request_prometheus",
+                        return_value=(prom_payload, 200),
+                    ) as backend,
+                ):
+                    result = metrics.execute(
+                        {
+                            "namespace": "ns",
+                            "pod": "pod",
+                            "purpose": "normalize a stale fallback window",
+                            "promql": promql,
+                            "query_type": "range",
+                            "start": "2024-01-01T00:00:00Z",
+                            "end": "2024-01-01T01:00:00Z",
+                            "window_minutes": window_minutes,
+                            "step": "1m",
+                        }
+                    )
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(
+                    result["query"]["requested_time_range"],
+                    {
+                        "start": "2024-01-01T00:00:00Z",
+                        "end": "2024-01-01T01:00:00Z",
+                    },
+                )
+                self.assertEqual(
+                    result["query"]["time_range"],
+                    {
+                        "start": "2026-07-23T11:59:00Z",
+                        "end": "2026-07-23T12:00:00Z",
+                    },
+                )
+                self.assertEqual(
+                    result["query"]["time_range_adjustment"],
+                    {
+                        "reason": "range_precedes_pod_lifecycle",
+                        "action": "replaced_with_current_bounded_window",
+                    },
+                )
+                backend.assert_called_once_with(
+                    "api/v1/query_range",
+                    {
+                        "query": promql,
+                        "start": "2026-07-23T11:59:00Z",
+                        "end": "2026-07-23T12:00:00Z",
+                        "step": "1m",
+                    },
+                )
+
+    def test_fully_stale_range_rejects_overflowing_fallback_minutes(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T07:25:45Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        with (
+            patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(metrics, "_request_prometheus") as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "reject an overflowing stale fallback window",
+                    "promql": 'up{namespace="ns",pod="pod"}',
+                    "query_type": "range",
+                    "start": "2024-01-01T00:00:00Z",
+                    "end": "2024-01-01T01:00:00Z",
+                    "window_minutes": 10**400,
+                    "step": "1m",
+                }
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "invalid_time_range")
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {
+                "start": "2024-01-01T00:00:00Z",
+                "end": "2024-01-01T01:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "range_precedes_pod_lifecycle",
+                "action": "replaced_with_current_bounded_window",
+            },
         )
         backend.assert_not_called()
 
@@ -575,9 +1297,166 @@ class MetricsResultTests(unittest.TestCase):
         )
         self.assertEqual(
             result["query"]["requested_time_range"],
+            {},
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
             {
-                "start": "2026-07-23T11:30:00Z",
+                "start": "2026-07-23T11:45:00Z",
                 "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "range_precedes_pod_lifecycle",
+                "action": "clamped_start_to_pod_creation",
+            },
+        )
+
+    def test_relative_range_preserves_adjustment_when_clamped_to_pod_creation(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T11:45:00Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "inspect the current pod portion of a lookback",
+                    "promql": promql,
+                    "query_type": "range",
+                    "start": "1h",
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {"start": "1h"},
+        )
+        self.assertEqual(
+            result["query"]["time_range"],
+            {
+                "start": "2026-07-23T11:45:00Z",
+                "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "relative_lookback",
+                "action": "converted_duration_to_bounded_window",
+                "pod_lifecycle_adjustment": {
+                    "reason": "range_precedes_pod_lifecycle",
+                    "action": "clamped_start_to_pod_creation",
+                },
+            },
+        )
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": promql,
+                "start": "2026-07-23T11:45:00Z",
+                "end": "2026-07-23T12:00:00Z",
+                "step": "1m",
+            },
+        )
+
+    def test_future_range_preserves_adjustment_when_clamped_to_pod_creation(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "creation_timestamp": "2026-07-23T11:45:00Z",
+            "pod_ip": "10.0.0.8",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        promql = 'up{namespace="ns",pod="pod"}'
+        prom_payload = {
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        }
+        with (
+            patch.object(
+                metrics,
+                "resolve_pod_scope",
+                side_effect=[(entity, None), (entity, None)],
+            ),
+            patch(
+                "servers.aiops_observability.schemas.utc_now",
+                return_value=datetime(
+                    2026,
+                    7,
+                    23,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                return_value=(prom_payload, 200),
+            ) as backend,
+        ):
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "recover a future range within the pod lifetime",
+                    "promql": promql,
+                    "query_type": "range",
+                    "start": "2026-07-23T13:00:00Z",
+                    "end": "2026-07-23T14:00:00Z",
+                    "window_minutes": 30,
+                    "step": "1m",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["query"]["requested_time_range"],
+            {
+                "start": "2026-07-23T13:00:00Z",
+                "end": "2026-07-23T14:00:00Z",
             },
         )
         self.assertEqual(
@@ -585,6 +1464,26 @@ class MetricsResultTests(unittest.TestCase):
             {
                 "start": "2026-07-23T11:45:00Z",
                 "end": "2026-07-23T12:00:00Z",
+            },
+        )
+        self.assertEqual(
+            result["query"]["time_range_adjustment"],
+            {
+                "reason": "future_time_range",
+                "action": "replaced_with_current_bounded_window",
+                "pod_lifecycle_adjustment": {
+                    "reason": "range_precedes_pod_lifecycle",
+                    "action": "clamped_start_to_pod_creation",
+                },
+            },
+        )
+        backend.assert_called_once_with(
+            "api/v1/query_range",
+            {
+                "query": promql,
+                "start": "2026-07-23T11:45:00Z",
+                "end": "2026-07-23T12:00:00Z",
+                "step": "1m",
             },
         )
 

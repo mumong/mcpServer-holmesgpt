@@ -199,7 +199,12 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
             "status": "query_succeeded",
             "source_system": "deepflow+tempo",
             "dimension": "tracing",
-            "entity": {"kind": "Pod", "namespace": "ns", "pod": "pod"},
+            "entity": {
+                "kind": "Pod",
+                "namespace": "ns",
+                "pod": "pod",
+                "pod_uid": "uid-current",
+            },
             "purpose": "retain the evidence behind exact trace correlation",
             "coverage": "present",
             "directness": "direct",

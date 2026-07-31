@@ -1,7 +1,8 @@
+import json
 import unittest
 from unittest.mock import patch
 
-from servers.aiops_observability.query import tracing
+from servers.aiops_observability.query import common, tracing
 from servers.aiops_observability.schemas import SourceResult
 from servers.holmes_tools import aiops_observability_query
 
@@ -912,6 +913,84 @@ class TracingQueryTests(unittest.TestCase):
         )
 
         self.assertEqual(facts[0]["directness"], "related_context")
+
+    def test_old_uid_same_name_span_is_not_direct_or_published_for_current_pod(self):
+        trace_id = "0123456789abcdef0123456789abcdef"
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-current",
+            "pod_ip": "10.0.0.2",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        flow = {
+            "time": "2026-07-21 00:10:00",
+            "src_ip": "10.0.0.3",
+            "dst_ip": "10.0.0.2",
+            "l7_protocol_str": "HTTP",
+            "request_type": "GET",
+            "request_resource": "/ready",
+            "response_code": 200,
+            "response_status": "Ok",
+            "response_duration": 1000,
+            "trace_id": trace_id,
+            "span_id": "abcdef0123456789",
+        }
+        old_span = {
+            "trace_id": trace_id,
+            "service": "api",
+            "name": "GET /ready",
+            "start": "2026-07-21T00:10:00Z",
+            "attributes": {
+                "k8s.pod.name": "pod",
+                "k8s.pod.uid": "uid-old",
+            },
+        }
+        with (
+            patch.object(tracing, "resolve_pod_scope", return_value=(entity, None)),
+            patch.object(tracing, "_query_deepflow", return_value={"data": [flow]}),
+            patch.object(
+                tracing,
+                "_query_tempo",
+                return_value={
+                    "coverage": "present",
+                    "spans": [old_span],
+                    "query_meta": {"queried_trace_ids": [trace_id]},
+                    "error": None,
+                    "executed": True,
+                },
+            ),
+        ):
+            result = tracing.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "exclude old pod lifecycle spans",
+                }
+            )
+
+        tempo_fact = next(
+            fact for fact in result["facts"]
+            if fact["source_system"] == "tempo"
+        )
+        self.assertEqual(tempo_fact.get("pod_uid"), "uid-old")
+        self.assertEqual(tempo_fact["directness"], "related_context")
+        published = json.loads(common.dump_bounded_result(result))
+        self.assertFalse(
+            any(
+                record["source_system"] == "tempo"
+                for record in published["fact_ledger"]["records"]
+            )
+        )
+        self.assertTrue(
+            any(
+                record["source_system"] == "deepflow"
+                for record in published["fact_ledger"]["records"]
+            )
+        )
+        self.assertEqual(published["correlations"], [])
 
 
 if __name__ == "__main__":

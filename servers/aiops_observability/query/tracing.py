@@ -777,14 +777,12 @@ def _facts(
         )
         directness = span_directness
         if span_directness == "direct":
-            directness = (
-                "direct"
-                if (
-                    (observed_uid and pod_uid and observed_uid == pod_uid)
-                    or (observed_pod and observed_pod == pod)
-                )
-                else "related_context"
+            matches_scope = (
+                bool(pod_uid and observed_uid == pod_uid)
+                if observed_uid
+                else bool(observed_pod and observed_pod == pod)
             )
+            directness = "direct" if matches_scope else "related_context"
         ref = evidence_ref("tempo", namespace, pod, span)
         span_facts.append(
             {
@@ -792,6 +790,7 @@ def _facts(
                 "source_system": "tempo",
                 "dimension": "tracing",
                 "entity": f"{namespace}/{pod}",
+                "pod_uid": observed_uid or None,
                 "observed_at": span.get("start"),
                 "name": "application_span",
                 "value": span,

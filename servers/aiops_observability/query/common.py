@@ -6,10 +6,13 @@ import base64
 import copy
 import hashlib
 import json
+import re
 from collections import Counter
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from .. import schemas
 from ..collectors.kubernetes import get_pod
 from ..config import get_config
 from ..schemas import parse_time_window
@@ -19,6 +22,14 @@ MAX_RESULT_BYTES = 6144
 MAX_INPUT_BYTES = 4096
 MAX_QUERY_METADATA_BYTES = 4096
 MAX_WINDOW_SECONDS = 2 * 60 * 60
+_TOPOLOGY_SOURCE_SYSTEMS = {"kubernetes", "deepflow"}
+
+
+@dataclass(frozen=True)
+class NormalizedTimeWindow:
+    requested: dict[str, str]
+    effective: dict[str, str]
+    adjustment: dict[str, str] | None = None
 
 
 def error_result(
@@ -121,19 +132,18 @@ def bounded_window(
     *,
     not_before: str | None = None,
 ) -> tuple[dict[str, str] | None, dict[str, str] | None]:
+    normalized, error = normalize_time_window(arguments)
+    if error or normalized is None:
+        return None, error
+
     try:
-        window = parse_time_window(
-            start=arguments.get("start"),
-            end=arguments.get("end"),
-            window_minutes=int(arguments.get("window_minutes") or 30),
-        )
-        start = _parse_datetime(window.start)
-        end = _parse_datetime(window.end)
+        start = _parse_datetime(normalized.effective["start"])
+        end = _parse_datetime(normalized.effective["end"])
         if not_before:
             lifecycle_start = _parse_datetime(not_before)
             if start < lifecycle_start:
                 start = lifecycle_start
-    except (TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         return None, {"code": "invalid_time_range", "message": str(exc)}
 
     duration = (end - start).total_seconds()
@@ -151,6 +161,160 @@ def bounded_window(
         "start": _format_datetime(start),
         "end": _format_datetime(end),
     }, None
+
+
+def normalize_time_window(
+    arguments: dict[str, Any],
+) -> tuple[NormalizedTimeWindow | None, dict[str, str] | None]:
+    start_text = str(arguments.get("start") or "").strip()
+    end_text = str(arguments.get("end") or "").strip()
+    requested = {
+        key: value
+        for key, value in (("start", start_text), ("end", end_text))
+        if value
+    }
+    try:
+        raw_window_minutes = arguments.get("window_minutes")
+        window_minutes = max(
+            1,
+            int(30 if raw_window_minutes is None else raw_window_minutes),
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        return None, {"code": "invalid_time_range", "message": str(exc)}
+
+    lookback_seconds = (
+        _parse_lookback_seconds(start_text)
+        if start_text and not end_text
+        else None
+    )
+    if lookback_seconds is not None:
+        if lookback_seconds <= 0:
+            return None, {
+                "code": "invalid_time_range",
+                "message": "lookback must be greater than zero",
+            }
+        if lookback_seconds > MAX_WINDOW_SECONDS:
+            return None, {
+                "code": "range_too_large",
+                "message": "query window must not exceed two hours",
+            }
+        end = schemas.utc_now().astimezone(timezone.utc)
+        start = end - timedelta(seconds=lookback_seconds)
+        if start >= end:
+            return None, {
+                "code": "invalid_time_range",
+                "message": "lookback is too small to form a time window",
+            }
+        effective = {
+            "start": _format_datetime(start),
+            "end": _format_datetime(end),
+        }
+        return NormalizedTimeWindow(
+            requested=requested,
+            effective=effective,
+            adjustment={
+                "reason": "relative_lookback",
+                "action": "converted_duration_to_bounded_window",
+            },
+        ), None
+
+    try:
+        for value in (start_text, end_text):
+            if value:
+                _parse_aware_datetime(value)
+        window = parse_time_window(
+            start=start_text or None,
+            end=end_text or None,
+            window_minutes=window_minutes,
+        )
+        start = _parse_datetime(window.start)
+        end = _parse_datetime(window.end)
+    except (TypeError, ValueError, OverflowError) as exc:
+        return None, {"code": "invalid_time_range", "message": str(exc)}
+
+    effective = {
+        "start": _format_datetime(start),
+        "end": _format_datetime(end),
+    }
+    duration = (end - start).total_seconds()
+    if abs(duration) > MAX_WINDOW_SECONDS:
+        return None, {
+            "code": "range_too_large",
+            "message": "query window must not exceed two hours",
+        }
+
+    if duration <= 0:
+        fallback, fallback_error = _current_bounded_window(window_minutes)
+        if fallback_error or fallback is None:
+            return None, fallback_error
+        return NormalizedTimeWindow(
+            requested=requested,
+            effective=fallback,
+            adjustment={
+                "reason": "reversed_time_range",
+                "action": "replaced_with_current_bounded_window",
+            },
+        ), None
+
+    now = schemas.utc_now().astimezone(timezone.utc)
+    if start >= now:
+        fallback, fallback_error = _current_bounded_window(window_minutes)
+        if fallback_error or fallback is None:
+            return None, fallback_error
+        return NormalizedTimeWindow(
+            requested=requested,
+            effective=fallback,
+            adjustment={
+                "reason": "future_time_range",
+                "action": "replaced_with_current_bounded_window",
+            },
+        ), None
+
+    return NormalizedTimeWindow(
+        requested=requested,
+        effective=effective,
+    ), None
+
+
+def _current_bounded_window(
+    window_minutes: int,
+) -> tuple[dict[str, str] | None, dict[str, str] | None]:
+    try:
+        timedelta(minutes=window_minutes)
+        minutes = min(120, max(1, window_minutes))
+        end = schemas.utc_now().astimezone(timezone.utc)
+        start = end - timedelta(minutes=minutes)
+    except (TypeError, ValueError, OverflowError) as exc:
+        return None, {"code": "invalid_time_range", "message": str(exc)}
+    return {
+        "start": _format_datetime(start),
+        "end": _format_datetime(end),
+    }, None
+
+
+def _parse_aware_datetime(value: str) -> datetime:
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(
+            "explicit timestamps must include Z or a UTC offset"
+        )
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_lookback_seconds(value: str) -> float | None:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(ms|s|m|h|d|w)", value.lower())
+    if not match:
+        return None
+    units = {
+        "ms": 0.001,
+        "s": 1.0,
+        "m": 60.0,
+        "h": 3600.0,
+        "d": 86400.0,
+        "w": 604800.0,
+    }
+    return float(match.group(1)) * units[match.group(2)]
 
 
 def evidence_ref(
@@ -279,7 +443,11 @@ def _shrink_result_once(payload: dict[str, Any]) -> bool:
         return True
     if is_topology and _compact_topology_fact(payload):
         return True
+    if is_topology and _compact_topology_entity(payload):
+        return True
     if is_topology and _drop_duplicate_topology_fact(payload):
+        return True
+    if is_topology and _drop_low_priority_topology_fact(payload):
         return True
     if _drop_list_tail(payload, "correlations", minimum=1):
         return True
@@ -304,6 +472,8 @@ def _alias_topology_projection(payload: dict[str, Any]) -> bool:
     facts = payload.get("facts")
     if not isinstance(facts, list):
         return False
+    removed_invalid_fact = _filter_topology_facts_by_provenance(payload)
+    facts = payload["facts"]
     has_expanded_endpoint = any(
         isinstance(value.get(endpoint), dict)
         for fact in facts
@@ -313,7 +483,7 @@ def _alias_topology_projection(payload: dict[str, Any]) -> bool:
         for endpoint in ("source", "target")
     )
     if not has_expanded_endpoint:
-        return False
+        return removed_invalid_fact
 
     source_system = str(payload.get("source_system") or "kubernetes")
     entity_aliases: dict[str, bytes] = {}
@@ -321,6 +491,7 @@ def _alias_topology_projection(payload: dict[str, Any]) -> bool:
     entities_by_id: dict[str, dict[str, Any]] = {}
     primary_entity_id = ""
     primary = payload.get("entity") if isinstance(payload.get("entity"), dict) else {}
+    primary_uid = str(primary.get("pod_uid") or primary.get("uid") or "")
 
     for fact in facts:
         if not isinstance(fact, dict):
@@ -353,6 +524,8 @@ def _alias_topology_projection(payload: dict[str, Any]) -> bool:
                 == str(primary.get("namespace") or "")
                 and str(entity.get("name") or "")
                 == str(primary.get("pod") or primary.get("name") or "")
+                and primary_uid
+                and str(entity.get("uid") or "") == primary_uid
             ):
                 primary_entity_id = entity_id
             value[endpoint] = entity_id
@@ -378,6 +551,41 @@ def _alias_topology_projection(payload: dict[str, Any]) -> bool:
     return True
 
 
+def _filter_topology_facts_by_provenance(payload: dict[str, Any]) -> bool:
+    facts = payload.get("facts")
+    if not isinstance(facts, list):
+        return False
+    retained = [
+        fact for fact in facts if _topology_fact_has_allowed_provenance(fact)
+    ]
+    if len(retained) == len(facts):
+        return False
+    payload["facts"] = retained
+    return True
+
+
+def _topology_fact_has_allowed_provenance(fact: Any) -> bool:
+    if not isinstance(fact, dict):
+        return False
+    fact_source = str(fact.get("source_system") or "").strip()
+    if fact_source not in _TOPOLOGY_SOURCE_SYSTEMS:
+        return False
+    value = fact.get("value")
+    if not isinstance(value, dict):
+        return True
+    for key in ("source", "target"):
+        endpoint = value.get(key)
+        if not isinstance(endpoint, dict):
+            continue
+        source_system = str(endpoint.get("source_system") or "").strip()
+        if (
+            source_system
+            and source_system not in _TOPOLOGY_SOURCE_SYSTEMS
+        ):
+            return False
+    return True
+
+
 def _stable_topology_alias(
     prefix: str,
     value: Any,
@@ -395,7 +603,7 @@ def _stable_topology_alias(
         ).encode("utf-8")
     )
     digest = hashlib.sha256(encoded).digest()
-    for byte_count in (20, 24, 28, 32):
+    for byte_count in (6, 9, 12, 16, 20, 24, 28, 32):
         token = base64.urlsafe_b64encode(
             digest[:byte_count]
         ).decode("ascii").rstrip("=")
@@ -430,10 +638,40 @@ def _compact_topology_fact(payload: dict[str, Any]) -> bool:
             "matched_pod_labels",
             "cluster_ip",
             "selector",
+            "source_field",
+            "relationship",
+            "relation",
         ):
             if key in value:
                 value.pop(key)
                 return True
+        for key in ("entity", "name", "observed_at", "confidence"):
+            if key in fact:
+                fact.pop(key)
+                return True
+    return False
+
+
+def _compact_topology_entity(payload: dict[str, Any]) -> bool:
+    entities = payload.get("entities")
+    if not isinstance(entities, list):
+        return False
+    primary = payload.get("entity")
+    primary = primary if isinstance(primary, dict) else {}
+    primary_id = str(primary.get("entity_id") or "")
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        entity_id = str(entity.get("entity_id") or "")
+        for key in ("attributes", "source_system"):
+            if key in entity:
+                entity.pop(key)
+                return True
+        if entity_id != primary_id:
+            for key in ("uid", "namespace"):
+                if key in entity:
+                    entity.pop(key)
+                    return True
     return False
 
 
@@ -453,6 +691,73 @@ def _drop_duplicate_topology_fact(payload: dict[str, Any]) -> bool:
         relation = str(fact.get("relation") or "")
         if relation and counts[relation] > 1:
             facts.pop(index)
+            return True
+    return False
+
+
+def _drop_low_priority_topology_fact(payload: dict[str, Any]) -> bool:
+    facts = payload.get("facts")
+    if not isinstance(facts, list) or len(facts) <= 1:
+        return False
+    priorities = {
+        "owns_container": 3,
+        "scheduled_on": 2,
+        "owned_by": 1,
+        "selects": 0,
+    }
+    candidates = sorted(
+        range(len(facts)),
+        key=lambda index: (
+            priorities.get(
+                str(facts[index].get("relation") or "")
+                if isinstance(facts[index], dict)
+                else "",
+                4,
+            ),
+            index,
+        ),
+        reverse=True,
+    )
+    for index in candidates:
+        retained = facts[:index] + facts[index + 1 :]
+        if any(_is_direct_primary_topology_fact(payload, fact) for fact in retained):
+            facts.pop(index)
+            return True
+    return False
+
+
+def _is_direct_primary_topology_fact(
+    payload: dict[str, Any],
+    fact: Any,
+) -> bool:
+    if not isinstance(fact, dict) or fact.get("directness") != "direct":
+        return False
+    value = fact.get("value")
+    if not isinstance(value, dict):
+        return False
+    endpoints = (value.get("source"), value.get("target"))
+    primary = payload.get("entity")
+    primary = primary if isinstance(primary, dict) else {}
+    primary_alias = str(primary.get("entity_id") or "")
+    if primary_alias and primary_alias in endpoints:
+        return True
+    namespace = str(primary.get("namespace") or "")
+    pod = str(primary.get("pod") or primary.get("name") or "")
+    pod_uid = str(primary.get("pod_uid") or primary.get("uid") or "")
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict):
+            continue
+        if str(endpoint.get("kind") or "").lower() != "pod":
+            continue
+        if str(endpoint.get("namespace") or "") != namespace:
+            continue
+        if str(endpoint.get("name") or "") != pod:
+            continue
+        endpoint_uid = str(endpoint.get("uid") or "")
+        if (
+            (pod_uid and endpoint_uid == pod_uid)
+            or (not pod_uid and not endpoint_uid)
+        ):
             return True
     return False
 
@@ -550,11 +855,19 @@ def _strictly_shorter_text(value: str, max_prefix: int) -> str:
 def _sync_result_projection(payload: dict[str, Any]) -> None:
     if payload.get("dimension") == "topology":
         _sync_topology_projection(payload)
-    _sync_correlations(payload)
     _sync_evidence_refs(payload)
+    from .fact_ledger import build_fact_ledger
+
+    ledger = build_fact_ledger(payload)
+    if ledger is None:
+        payload.pop("fact_ledger", None)
+    else:
+        payload["fact_ledger"] = ledger
+    _sync_correlations(payload, ledger)
 
 
 def _sync_topology_projection(payload: dict[str, Any]) -> None:
+    _filter_topology_facts_by_provenance(payload)
     facts = payload.get("facts")
     if not isinstance(facts, list):
         payload["entities"] = []
@@ -583,6 +896,9 @@ def _sync_topology_projection(payload: dict[str, Any]) -> None:
     for fact in facts:
         if not isinstance(fact, dict):
             continue
+        fact_source_system = str(
+            fact.get("source_system") or source_system
+        )
         value = fact.get("value")
         if not isinstance(value, dict):
             continue
@@ -624,7 +940,7 @@ def _sync_topology_projection(payload: dict[str, Any]) -> None:
                     "relation": value.get("relation") or fact.get("relation"),
                     "source": source_id,
                     "target": target_id,
-                    "source_system": source_system,
+                    "source_system": fact_source_system,
                     "evidence_ref": fact.get("ref"),
                 }
             )
@@ -669,20 +985,25 @@ def _sync_evidence_refs(payload: dict[str, Any]) -> None:
     ]
 
 
-def _sync_correlations(payload: dict[str, Any]) -> None:
+def _sync_correlations(
+    payload: dict[str, Any],
+    ledger: dict[str, Any] | None,
+) -> None:
     correlations = payload.get("correlations")
     if not isinstance(correlations, list):
         return
-    facts = payload.get("facts")
-    if not isinstance(facts, list):
+    records = ledger.get("records") if isinstance(ledger, dict) else None
+    if not isinstance(records, list):
         payload["correlations"] = []
         return
     sources_by_trace: dict[str, set[str]] = {}
-    for fact in facts:
-        if not isinstance(fact, dict):
+    for record in records:
+        if not isinstance(record, dict):
             continue
-        trace_id = str(fact.get("trace_id") or "")
-        source = str(fact.get("source_system") or "")
+        metadata = record.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        trace_id = str(metadata.get("trace_id") or "")
+        source = str(record.get("source_system") or "")
         if trace_id and source:
             sources_by_trace.setdefault(trace_id, set()).add(source)
     payload["correlations"] = [

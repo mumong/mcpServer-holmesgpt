@@ -522,6 +522,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
                     for part in (namespace, pod, sample.get("container"))
                     if part
                 ),
+                "pod_uid": sample.get("pod_uid"),
                 "observed_at": sample.get("timestamp"),
                 "name": "log.message",
                 "value": sample.get("message"),

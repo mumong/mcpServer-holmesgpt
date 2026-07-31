@@ -13,6 +13,7 @@ from .common import (
     bounded_window,
     error_result,
     evidence_ref,
+    normalize_time_window,
     resolve_pod_scope,
 )
 
@@ -258,7 +259,12 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     params: dict[str, Any] = {"query": promql}
     path = "api/v1/query"
     if query_type == "range":
-        window, requested_window, window_error = _range_window(
+        (
+            window,
+            requested_window,
+            window_adjustment,
+            window_error,
+        ) = _range_window(
             arguments,
             not_before=entity.get("creation_timestamp"),
         )
@@ -267,6 +273,11 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             **(
                 {"requested_time_range": requested_window}
                 if requested_window is not None
+                else {}
+            ),
+            **(
+                {"time_range_adjustment": window_adjustment}
+                if window_adjustment is not None
                 else {}
             ),
             **(
@@ -792,37 +803,61 @@ def _range_window(
 ) -> tuple[
     dict[str, str] | None,
     dict[str, str] | None,
+    dict[str, Any] | None,
     dict[str, str] | None,
 ]:
-    requested, error = bounded_window(arguments)
-    if error or requested is None:
-        return None, requested, error
-    effective = dict(requested)
+    requested = {
+        key: value
+        for key, value in (
+            ("start", str(arguments.get("start") or "").strip()),
+            ("end", str(arguments.get("end") or "").strip()),
+        )
+        if value
+    }
+    normalized, error = normalize_time_window(arguments)
+    if error or normalized is None:
+        return None, requested, None, error
+    requested = normalized.requested
+    effective = dict(normalized.effective)
+    adjustment = normalized.adjustment
     if not not_before:
-        return effective, requested, None
+        return effective, requested, adjustment, None
 
     try:
-        requested_start = _parse_rfc3339(requested["start"])
-        requested_end = _parse_rfc3339(requested["end"])
+        effective_start = _parse_rfc3339(effective["start"])
+        effective_end = _parse_rfc3339(effective["end"])
         lifecycle_start = _parse_rfc3339(not_before)
     except (KeyError, TypeError, ValueError) as exc:
-        return None, requested, {
+        return None, requested, None, {
             "code": "invalid_time_range",
             "message": str(exc),
         }
-    if requested_start >= lifecycle_start:
-        return effective, requested, None
+    if effective_start >= lifecycle_start:
+        return effective, requested, adjustment, None
     if arguments.get("start"):
-        return None, requested, {
-            "code": "range_precedes_pod_lifecycle",
-            "message": (
-                f"explicit range start {requested['start']} predates current "
-                f"Pod creation {not_before}; query the exact current Pod "
-                "only within its lifecycle"
-            ),
-        }
-    if lifecycle_start >= requested_end:
-        return None, requested, {
+        if effective_end > lifecycle_start:
+            effective["start"] = _format_rfc3339(lifecycle_start)
+            return effective, requested, _lifecycle_adjustment(
+                adjustment,
+                action="clamped_start_to_pod_creation",
+            ), None
+
+        fallback_arguments = {}
+        if "window_minutes" in arguments:
+            fallback_arguments["window_minutes"] = arguments["window_minutes"]
+        fallback_adjustment = _lifecycle_adjustment(
+            adjustment,
+            action="replaced_with_current_bounded_window",
+        )
+        fallback, fallback_error = bounded_window(
+            fallback_arguments,
+            not_before=not_before,
+        )
+        if fallback_error or fallback is None:
+            return None, requested, fallback_adjustment, fallback_error
+        return fallback, requested, fallback_adjustment, None
+    if lifecycle_start >= effective_end:
+        return None, requested, None, {
             "code": "invalid_time_range",
             "message": (
                 "the synthesized query window does not overlap the current "
@@ -830,7 +865,27 @@ def _range_window(
             ),
         }
     effective["start"] = _format_rfc3339(lifecycle_start)
-    return effective, requested, None
+    return effective, requested, _lifecycle_adjustment(
+        adjustment,
+        action="clamped_start_to_pod_creation",
+    ), None
+
+
+def _lifecycle_adjustment(
+    adjustment: dict[str, Any] | None,
+    *,
+    action: str,
+) -> dict[str, Any]:
+    lifecycle = {
+        "reason": "range_precedes_pod_lifecycle",
+        "action": action,
+    }
+    if adjustment is None:
+        return lifecycle
+    return {
+        **adjustment,
+        "pod_lifecycle_adjustment": lifecycle,
+    }
 
 
 def _prometheus_result_shape_error(

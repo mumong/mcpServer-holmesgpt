@@ -344,6 +344,8 @@ def _relationship_fact(
     return {
         "ref": evidence_ref("topology", namespace, pod, value),
         "source_system": "kubernetes",
+        "dimension": "topology",
+        "entity": f"{namespace}/{pod}",
         "name": "kubernetes.relationship",
         "value": value,
         "relation": relation,

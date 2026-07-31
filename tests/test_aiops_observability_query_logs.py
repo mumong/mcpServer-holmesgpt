@@ -1,7 +1,8 @@
+import json
 import unittest
 from unittest.mock import patch
 
-from servers.aiops_observability.query import logs
+from servers.aiops_observability.query import common, logs
 from servers.holmes_tools import aiops_observability_query
 
 
@@ -281,6 +282,55 @@ class LoggingQueryTests(unittest.TestCase):
             by_message["current pod incarnation"]["directness"],
             "direct",
         )
+
+    def test_old_uid_hit_is_not_published_in_current_pod_fact_ledger(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-current",
+            "pod_ip": "10.0.0.2",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        old_hit = {
+            "_index": "filebeat-2026.07.21",
+            "_id": "old-pod-log",
+            "_source": {
+                "@timestamp": "2026-07-21T00:10:00Z",
+                "message": "log from an old pod incarnation",
+                "kubernetes": {
+                    "namespace": "ns",
+                    "pod": {"name": "pod", "uid": "uid-old"},
+                    "container": {"name": "api"},
+                },
+            },
+        }
+        with (
+            patch.object(logs, "resolve_pod_scope", return_value=(entity, None)),
+            patch.object(
+                logs,
+                "_query_elasticsearch",
+                return_value={"hits": {"hits": [old_hit]}},
+            ),
+        ):
+            result = logs.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "exclude old pod lifecycle evidence",
+                    "allow_name_fallback": False,
+                }
+            )
+
+        self.assertEqual(result["samples"][0]["pod_uid"], "uid-old")
+        self.assertEqual(result["facts"][0].get("pod_uid"), "uid-old")
+        published = json.loads(common.dump_bounded_result(result))
+        self.assertEqual(
+            published["fact_ledger"]["scope_entity_ids"],
+            ["k8s.pod:ns/pod:uid-current"],
+        )
+        self.assertEqual(published["fact_ledger"]["records"], [])
 
     def test_custom_field_request_does_not_remove_log_message(self):
         entity = {
