@@ -80,7 +80,12 @@ TOOLS = [
             "Execute one PromQL expression selected by the model for an exact Kubernetes Pod. "
             "The model chooses metrics from the current diagnostic question; the tool never "
             "routes by fault type. Every vector selector must contain exact namespace and pod "
-            "matchers. Returns bounded real Prometheus values, labels, statistics and evidence refs."
+            "matchers. Returns bounded real Prometheus values, labels, statistics and evidence refs. "
+            "Iterate before concluding: if an instant query returns only a single point "
+            "(trend_evaluable=false) but your purpose needs growth/trend evidence, call again "
+            "with query_type=range and a window covering the anomaly (e.g. lookback_minutes "
+            "30-60, step 30s-1m). If the result is empty, first re-check metric name and label "
+            "matchers, then state a new purpose and retry once with corrected parameters."
         ),
         inputSchema=_schema(
             {
@@ -114,7 +119,12 @@ TOOLS = [
         description=(
             "Query real Elasticsearch/Filebeat logs for one Kubernetes Pod using structured "
             "filters selected by the model. The tool builds safe DSL, prefers Pod UID identity, "
-            "and never chooses keywords by fault type. Returns bounded decisive log text and refs."
+            "and never chooses keywords by fault type. Returns bounded decisive log text and refs. "
+            "Iterate before concluding: compare the returned lines with your purpose — if they "
+            "are empty, truncated or not decisive (e.g. missing the crash window), call again "
+            "with an adjusted time window, container, keywords, levels or trace_id instead of "
+            "declaring logging absent. A genuinely empty result after a reasonable retry is "
+            "itself valid evidence; report it honestly."
         ),
         inputSchema=_schema(
             {
@@ -163,7 +173,11 @@ TOOLS = [
             "structured filters selected by the model. DeepFlow queries always preserve Pod IP "
             "scope. A valid explicit trace ID may query Tempo without a Pod IP, marked as related "
             "context because flow association cannot be verified. The tool keeps network flows "
-            "separate from spans and never routes by fault type."
+            "separate from spans and never routes by fault type. "
+            "Iterate before concluding: if flows are too broad, noisy or empty for your purpose, "
+            "refine with direction, protocols, response_codes, min_duration_us, request_resource "
+            "or a narrower window and query again. When a decisive trace_id appears in flows or "
+            "logs, follow it with a targeted call to correlate application spans."
         ),
         inputSchema=_schema(
             {
@@ -214,7 +228,9 @@ TOOLS = [
             "Query source-backed Kubernetes relationships for one exact Pod. "
             "The model receives bounded owner, Service selector, node scheduling, "
             "and container membership facts derived from live Kubernetes objects. "
-            "The tool never infers relationships from names or routes by fault type."
+            "The tool never infers relationships from names or routes by fault type. "
+            "One call per Pod is usually enough; use the returned owner/service/node "
+            "facts to decide which entity to investigate next with the other tools."
         ),
         inputSchema=_schema(
             {
