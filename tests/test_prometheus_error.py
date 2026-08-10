@@ -20,6 +20,14 @@ class _FakeResponse:
 
 
 class PrometheusErrorTests(unittest.TestCase):
+    def test_all_prometheus_tools_are_marked_query_only(self):
+        for tool in prometheus.TOOLS:
+            with self.subTest(tool=tool.name):
+                description = tool.description.lower()
+                self.assertIn("/query", description)
+                self.assertIn("/ask", description)
+                self.assertIn("execute_pod_promql", description)
+
     def test_do_get_preserves_prometheus_error_body(self):
         with patch.object(prometheus.requests, "get", return_value=_FakeResponse()):
             result = json.loads(prometheus._do_get("api/v1/query", params={"query": "bad"}))

@@ -25,6 +25,15 @@ except ImportError:
 
 _logger = get_logger("prometheus")
 
+QUERY_ONLY_BOUNDARY = (
+    " AIOps boundary: use only in /query for general node/cluster Prometheus "
+    "queries; do not use in /ask Pod diagnosis, where execute_pod_promql is required."
+)
+
+
+def _query_only_description(capability: str) -> str:
+    return capability + QUERY_ONLY_BOUNDARY
+
 
 def _prometheus_http_error_payload(
     *,
@@ -208,27 +217,29 @@ def _schema_req(props: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
 TOOLS: List[Tool] = [
     Tool(
         name="list_prometheus_rules",
-        description="List Prometheus recording and alerting rules.",
+        description=_query_only_description("List Prometheus recording and alerting rules."),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="get_metric_names",
-        description="Get all metric names (label __name__ values).",
+        description=_query_only_description("Get all metric names (label __name__ values)."),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="get_label_values",
-        description="Get all values for a label.",
+        description=_query_only_description("Get all values for a label."),
         inputSchema=_schema_req({"label_name": {"type": "string", "description": "Label name"}}, ["label_name"]),
     ),
     Tool(
         name="get_all_labels",
-        description="Get all label names.",
+        description=_query_only_description("Get all label names."),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="get_series",
-        description="Get time series matching match[] (and optional start/end).",
+        description=_query_only_description(
+            "Get time series matching match[] (and optional start/end)."
+        ),
         inputSchema=_schema_req(
             {
                 "match": {"type": "string", "description": "Series selector"},
@@ -240,12 +251,16 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="get_metric_metadata",
-        description="Get metadata for metrics. Optionally pass metric_name.",
+        description=_query_only_description(
+            "Get metadata for metrics. Optionally pass metric_name."
+        ),
         inputSchema=_schema_req({"metric_name": {"type": "string"}}, []),
     ),
     Tool(
         name="execute_prometheus_instant_query",
-        description="Execute instant PromQL query. Optional: time (RFC3339 or unix).",
+        description=_query_only_description(
+            "Execute instant PromQL query. Optional: time (RFC3339 or unix)."
+        ),
         inputSchema=_schema_req(
             {"query": {"type": "string"}, "time": {"type": "string"}},
             ["query"],
@@ -253,7 +268,10 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="execute_prometheus_range_query",
-        description="Execute range PromQL query. Required: query, start, end. Optional: step (e.g. 15s).",
+        description=_query_only_description(
+            "Execute range PromQL query. Required: query, start, end. "
+            "Optional: step (e.g. 15s)."
+        ),
         inputSchema=_schema_req(
             {
                 "query": {"type": "string"},

@@ -70,12 +70,12 @@ mcpstander/
 | `helm-tools` | 8092 | 本地 Python MCP | Helm list / values / status / history / manifest 等 |
 | `k8s-core` | 8093 | 本地 Python MCP | Kubernetes describe / get / events / logs / top / jq / lineage 等 |
 | `bash_command` | 8094 | 本地 Python MCP | 受控 bash 命令与临时 Pod 调试 |
-| `prometheus` | 8095 | 本地 Python MCP | Prometheus rules / metrics / labels / series / PromQL 查询 |
+| `prometheus` | 8095 | 本地 Python MCP | 仅供 `/query` 的 node/cluster 通用 Prometheus rules / metrics / labels / series / PromQL 查询；不得用于 `/ask` Pod 异常诊断 |
 | `internet` | 8096 | 本地 Python MCP | 抓取网页内容 |
 | `connectivity_check` | 8097 | 本地 Python MCP | TCP 连通性检查 |
 | `core-investigation` | 8098 | 本地 Python MCP | 调查任务规划工具 |
 | `runbook` | 8099 | 本地 Python MCP | Runbook 搜索与读取 |
-| `aiops-observability-query` | 8100 | 本地 Python MCP | 通用 Pod 级 Metrics / Logging / Tracing / Topology 查询，原生发布 canonical Fact Ledger |
+| `aiops-observability-query` | 8100 | 本地 Python MCP | `/ask` Pod 异常诊断使用的 Pod-scoped Metrics / Logging / Tracing / Topology 查询；Metrics 工具为 `execute_pod_promql`，原生发布 canonical Fact Ledger |
 
 本地配置 `config/mcp_config.yaml` 可以与 K8s 部署端口不同，实际运行时请以当前使用的配置文件为准：
 
