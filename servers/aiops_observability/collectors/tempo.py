@@ -162,6 +162,9 @@ def _span_sample(span: Any, service: str, fallback_trace_id: str) -> dict[str, A
             item.get("traceId") or item.get("trace_id"),
             fallback_trace_id,
         ),
+        "span_id": _normalize_span_id(
+            item.get("spanId") or item.get("span_id")
+        ),
         "service": service or attributes.get("service.name") or "",
         "name": item.get("name") or "",
         "start": _readable_time(item.get("startTimeUnixNano") or item.get("start_time_unix_nano") or item.get("start")),
@@ -182,6 +185,21 @@ def _normalize_trace_id(value: Any, fallback: str = "") -> str:
         if len(decoded) == 16:
             return decoded.hex()
     return str(fallback or "").strip().lower()
+
+
+def _normalize_span_id(value: Any) -> str:
+    """Normalize OTLP span identity while preserving non-standard source IDs."""
+    text = str(value or "").strip()
+    if re.fullmatch(r"[0-9a-fA-F]{16}", text):
+        return text.lower()
+    if text:
+        try:
+            decoded = base64.b64decode(text, validate=True)
+        except (ValueError, TypeError):
+            decoded = b""
+        if len(decoded) == 8:
+            return decoded.hex()
+    return text[:128]
 
 
 def _attributes(value: Any) -> dict[str, Any]:

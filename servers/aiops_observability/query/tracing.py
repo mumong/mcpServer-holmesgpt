@@ -795,6 +795,7 @@ def _facts(
                 "name": "application_span",
                 "value": span,
                 "trace_id": span.get("trace_id"),
+                "span_id": span.get("span_id"),
                 "directness": directness,
             }
         )

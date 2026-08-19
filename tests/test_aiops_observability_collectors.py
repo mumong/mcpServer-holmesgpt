@@ -764,6 +764,28 @@ class SignalsAndTempoTests(unittest.TestCase):
         self.assertEqual(result.query_meta["failed_trace_count"], 1)
         self.assertEqual(result.query_meta["successful_lookup_count"], 1)
 
+    def test_tempo_successful_lookup_without_spans_is_empty(self):
+        import os
+        from servers.aiops_observability.collectors import tempo
+        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
+             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
+             patch.object(
+                 tempo._kube,
+                 "exec_in_pod",
+                 return_value=(True, json.dumps({"batches": []}), ""),
+             ):
+            result = tempo.collect_tempo(
+                namespace="ns",
+                pod="p",
+                trace_ids=["0123456789abcdef0123456789abcdef"],
+                timeout=5,
+            )
+
+        self.assertEqual(result.coverage, "empty")
+        self.assertEqual(result.records, [])
+        self.assertEqual(result.evidence, [])
+        self.assertEqual(result.query_meta["successful_lookup_count"], 1)
+
     def test_tempo_evidence_contains_at_most_three_readable_span_samples(self):
         import os
         trace_payload = {
@@ -805,6 +827,7 @@ class SignalsAndTempoTests(unittest.TestCase):
         samples = result.evidence[0].payload["spans"]
         self.assertEqual(len(samples), 3)
         self.assertEqual(samples[0]["trace_id"], "abc123")
+        self.assertEqual(samples[0]["span_id"], "span-0")
         self.assertEqual(samples[0]["service"], "aiops-oom-business")
         self.assertEqual(samples[0]["name"], "GET /allocate")
         self.assertEqual(samples[0]["start"], "1000")

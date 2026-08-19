@@ -8,6 +8,29 @@ from servers.holmes_tools import aiops_observability_query
 
 
 class TracingQueryTests(unittest.TestCase):
+    def test_tempo_span_fact_preserves_complete_trace_and_span_identity(self):
+        trace_id = "0123456789abcdef0123456789abcdef"
+        span_id = "abcdef0123456789"
+        facts = tracing._facts(
+            "ns",
+            "pod",
+            [],
+            [{
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "service": "api",
+                "name": "GET /ready",
+                "attributes": {"k8s.pod.name": "pod"},
+            }],
+            pod_uid="",
+        )
+
+        tempo_fact = next(
+            fact for fact in facts if fact["source_system"] == "tempo"
+        )
+        self.assertEqual(tempo_fact["trace_id"], trace_id)
+        self.assertEqual(tempo_fact["span_id"], span_id)
+
     def test_facts_interleave_deepflow_and_tempo_for_budget_fairness(self):
         trace_a = "0123456789abcdef0123456789abcdea"
         trace_b = "0123456789abcdef0123456789abcdeb"
