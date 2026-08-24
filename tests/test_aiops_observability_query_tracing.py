@@ -159,8 +159,14 @@ class TracingQueryTests(unittest.TestCase):
             )
 
         self.assertIsNotNone(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
         result = __import__("json").loads(raw)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertEqual(len(result["flows"]), 10)
+        self.assertEqual(len(result["spans"]), 3)
+        self.assertEqual(len(result["facts"]), 13)
+        self.assertEqual(len(result["samples"]), 13)
+        self.assertEqual(result["counts"]["returned"], 13)
         fact_sources = {
             fact["source_system"]
             for fact in result["facts"]

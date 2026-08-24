@@ -1,4 +1,4 @@
-"""Bounded, model-directed Pod observability queries."""
+"""Model-directed Pod queries with bounded sources and lossless responses."""
 
 from . import logs, metrics, tracing
 

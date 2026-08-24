@@ -490,9 +490,9 @@ class CanonicalFactLedgerTests(unittest.TestCase):
             for ref in record["evidence_refs"]
         }
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
-        self.assertTrue(published["truncated"])
-        self.assertTrue(published["entity"]["entity_id"].startswith("e:"))
+        self.assertFalse(published["serialization"]["response_truncated"])
+        self.assertFalse(published["truncated"])
+        self.assertEqual(published["entity"], payload["entity"])
         self.assertNotIn("selects", relations)
         self.assertNotIn(invalid_ref, retained_refs)
         self.assertIn("scheduled_on", relations)
@@ -544,7 +544,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
             published["topology_summary"]["relations"]
         )
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(published["serialization"]["response_truncated"])
         self.assertEqual(payload, original)
         self.assertEqual(fact_relations, legal_relations)
         self.assertEqual(edge_relations, legal_relations)
@@ -639,12 +639,13 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         raw = common.dump_bounded_result(payload)
         result = json.loads(raw)
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         self.assertNotEqual(
             (result.get("error") or {}).get("code"),
             "result_budget_exceeded",
         )
-        self.assertTrue(result["truncated"])
+        self.assertFalse(result["truncated"])
         self.assertEqual(
             result["fact_ledger"]["scope_entity_ids"],
             [
@@ -655,7 +656,11 @@ class CanonicalFactLedgerTests(unittest.TestCase):
                 + ":12345678-1234-1234-1234-123456789012"
             ],
         )
-        primary = result["entity"].get("entity_id")
+        primary = next(
+            entity["entity_id"]
+            for entity in result["entities"]
+            if entity["kind"] == "Pod"
+        )
         self.assertTrue(
             any(
                 primary in {edge["source"], edge["target"]}
@@ -664,7 +669,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         )
         self.assertTrue(result["fact_ledger"]["records"])
 
-    def test_compacted_topology_ledger_preserves_exact_scope_with_typed_alias(self):
+    def test_lossless_topology_ledger_preserves_exact_scope_with_typed_alias(self):
         raw = common.dump_bounded_result(_max_identifier_topology_payload())
         result = json.loads(raw)
         scope_id = result["fact_ledger"]["scope_entity_ids"][0]
@@ -681,7 +686,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
                 record["value"].get("target"),
             )
         }
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         self.assertIn("k8s.pod:scope/current", endpoints)
         self.assertTrue(
             all(endpoint.startswith("k8s.") for endpoint in endpoints)
@@ -690,7 +695,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
             {record["value"]["relation"] for record in records},
             {"owned_by", "selects", "scheduled_on", "owns_container"},
         )
-        self.assertEqual(len(records), 4)
+        self.assertEqual(len(records), 5)
 
     def test_compacted_topology_ledger_uses_typed_scope_connected_entities(self):
         result = json.loads(
@@ -755,7 +760,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         raw = common.dump_bounded_result(payload)
         result = json.loads(raw)
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         self.assertEqual(
             result["fact_ledger"]["scope_entity_ids"],
             [f"k8s.pod:{namespace}/{pod}:{current_uid}"],
@@ -763,7 +768,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         primary = next(
             entity
             for entity in result["entities"]
-            if entity["entity_id"] == result["entity"]["entity_id"]
+            if entity["kind"] == "Pod"
         )
         self.assertEqual(primary.get("uid"), current_uid)
 
@@ -774,7 +779,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
                 {"namespace": "ns", "pod": "api", "purpose": "publish facts"},
             )
         published = json.loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(published["serialization"]["response_truncated"])
         self.assertEqual(
             published["fact_ledger"]["contract_version"],
             "aiops.fact-ledger.v1",

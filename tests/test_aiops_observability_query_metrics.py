@@ -1863,6 +1863,32 @@ class MetricsResultTests(unittest.TestCase):
         self.assertEqual(resolver.call_count, 2)
         self.assertEqual(resolver.call_args_list[1].args, ("ns", "pod", "uid-1"))
 
+    def test_canonical_facts_cover_every_returned_series(self):
+        series = [
+            {
+                "metric": {
+                    "__name__": "container_memory_working_set_bytes",
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "container": f"container-{index}",
+                },
+                "value": [1784592000 + index, str(index)],
+                "unit": "bytes",
+                "sample_count": 1,
+                "trend_evaluable": False,
+                "directness": "direct",
+            }
+            for index in range(12)
+        ]
+
+        facts = metrics._facts(series, "ns", "pod")
+
+        self.assertEqual(len(facts), 12)
+        self.assertEqual(
+            {fact["labels"]["container"] for fact in facts},
+            {f"container-{index}" for index in range(12)},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -284,6 +284,27 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         coverage=coverage,
     )
     refs = [fact["ref"] for fact in facts]
+    matched_relationships = (
+        len(owner_chain)
+        + len(services)
+        + (1 if spec.get("nodeName") else 0)
+        + len(container_names)
+    )
+    truncation_stages = []
+    for reason, before, after in (
+        ("max_owner_relationships", len(owner_chain), len(retained_owners)),
+        ("max_service_relationships", len(services), len(retained_services)),
+        ("max_container_relationships", len(container_names), len(retained_containers)),
+    ):
+        if before > after:
+            truncation_stages.append(
+                {
+                    "stage": "tool_query",
+                    "reason": reason,
+                    "before": before,
+                    "after": after,
+                }
+            )
     result = {
         "ok": not limitations,
         "status": "query_partial" if limitations else "query_succeeded",
@@ -300,6 +321,17 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "edges": edges,
         "topology_summary": topology_summary,
         "evidence_refs": refs,
+        "counts": {
+            "matched": matched_relationships,
+            "retrieved": matched_relationships,
+            "normalized": matched_relationships,
+            "returned": len(facts),
+            "dropped": max(0, matched_relationships - len(facts)),
+        },
+        "truncation": {
+            "truncated": truncated,
+            "stages": truncation_stages,
+        },
         "truncated": truncated,
         "limitations": limitations,
         "limits": {

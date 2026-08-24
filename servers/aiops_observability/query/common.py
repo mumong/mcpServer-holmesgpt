@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 import hashlib
 import json
@@ -18,7 +17,9 @@ from ..config import get_config
 from ..schemas import parse_time_window
 
 
-MAX_RESULT_BYTES = 6144
+# Tool inputs and backend queries remain bounded for safety, but successful
+# result serialization is lossless.  Context shaping belongs to the AIOps
+# observation layer, where the full MCP response can first be archived.
 MAX_INPUT_BYTES = 4096
 MAX_QUERY_METADATA_BYTES = 4096
 MAX_WINDOW_SECONDS = 2 * 60 * 60
@@ -63,10 +64,10 @@ def error_result(
         "samples": [],
         "evidence_refs": [],
         "truncated": False,
-        "limits": {"max_serialized_bytes": MAX_RESULT_BYTES},
+        "limits": {"response_serialization": "lossless"},
         "error": {
             "code": _bounded_text(code, 64),
-            "message": _bounded_text(message, 1000),
+            "message": str(message or ""),
         },
     }
 
@@ -362,57 +363,37 @@ def query_metadata_exceeds_budget(query: Any) -> bool:
 
 
 def dump_bounded_result(payload: dict[str, Any]) -> str:
+    """Serialize a complete MCP result without response-budget evidence loss.
+
+    The historical function name is retained for call-site compatibility.
+    ``truncated`` continues to describe backend/query collection boundaries;
+    ``serialization.response_truncated`` explicitly describes this final MCP
+    response stage.
+    """
     result = copy.deepcopy(payload)
     result.setdefault("truncated", False)
     limits = result.setdefault("limits", {})
-    limits["max_serialized_bytes"] = MAX_RESULT_BYTES
-    query = copy.deepcopy(result.get("query"))
+    limits.pop("max_serialized_bytes", None)
+    limits["response_serialization"] = "lossless"
     _sync_result_projection(result)
-
-    raw = _dump(result)
-    while len(raw.encode("utf-8")) > MAX_RESULT_BYTES:
-        candidate = copy.deepcopy(result)
-        if not _shrink_result_once(candidate):
-            break
-        candidate["truncated"] = True
-        _sync_result_projection(candidate)
-        candidate["query"] = copy.deepcopy(query)
-        candidate_raw = _dump(candidate)
-        if len(candidate_raw.encode("utf-8")) >= len(raw.encode("utf-8")):
-            break
-        result = candidate
-        raw = candidate_raw
-
-    if len(raw.encode("utf-8")) > MAX_RESULT_BYTES:
-        result = {
-            "ok": False,
-            "status": "query_rejected",
-            "source_system": _bounded_text(result.get("source_system"), 64),
-            "dimension": _bounded_text(result.get("dimension"), 32),
-            "entity": _bounded_entity(result.get("entity")),
-            "purpose": _bounded_text(result.get("purpose"), 300),
-            "coverage": "error",
-            "directness": (
-                "related_context"
-                if result.get("directness") == "related_context"
-                else "direct"
-            ),
-            "query": query_descriptor(
-                query,
-                executed=result.get("status") == "query_succeeded",
-            ),
-            "facts": [],
-            "samples": [],
-            "evidence_refs": [],
-            "truncated": True,
-            "limits": {"max_serialized_bytes": MAX_RESULT_BYTES},
-            "error": {
-                "code": "result_budget_exceeded",
-                "message": "required query metadata exceeds the 6KB result budget",
-            },
+    serialization = result.setdefault("serialization", {})
+    serialization.update(
+        {
+            "policy": "lossless",
+            "response_truncated": False,
+            "serialized_bytes": 0,
         }
+    )
+    raw = ""
+    # serialized_bytes includes its own field.  Iterate until digit width and
+    # final UTF-8 size stabilize (normally two passes).
+    for _ in range(4):
         raw = _dump(result)
-    return raw
+        size = len(raw.encode("utf-8"))
+        if serialization.get("serialized_bytes") == size:
+            break
+        serialization["serialized_bytes"] = size
+    return _dump(result)
 
 
 def _dump(payload: dict[str, Any]) -> str:
@@ -422,133 +403,6 @@ def _dump(payload: dict[str, Any]) -> str:
         separators=(",", ":"),
         default=str,
     )
-
-
-def _drop_list_tail(
-    payload: dict[str, Any],
-    key: str,
-    *,
-    minimum: int,
-) -> bool:
-    value = payload.get(key)
-    if isinstance(value, list) and len(value) > minimum:
-        value.pop()
-        return True
-    return False
-
-
-def _shrink_result_once(payload: dict[str, Any]) -> bool:
-    is_topology = payload.get("dimension") == "topology"
-    if is_topology and _alias_topology_projection(payload):
-        return True
-    if is_topology and _compact_topology_fact(payload):
-        return True
-    if is_topology and _compact_topology_entity(payload):
-        return True
-    if is_topology and _drop_duplicate_topology_fact(payload):
-        return True
-    if is_topology and _drop_low_priority_topology_fact(payload):
-        return True
-    if _drop_list_tail(payload, "correlations", minimum=1):
-        return True
-    if _drop_list_tail(payload, "flows", minimum=0):
-        return True
-    if _drop_list_tail(payload, "spans", minimum=0):
-        return True
-    if _drop_list_tail(payload, "series", minimum=0):
-        return True
-    if _drop_nested_sample_value(payload):
-        return True
-    if _drop_list_tail(payload, "samples", minimum=1):
-        return True
-    if not is_topology and _drop_unprotected_fact(payload, minimum=1):
-        return True
-    if _shrink_long_evidence_strings(payload):
-        return True
-    return _drop_list_tail(payload, "correlations", minimum=0)
-
-
-def _alias_topology_projection(payload: dict[str, Any]) -> bool:
-    facts = payload.get("facts")
-    if not isinstance(facts, list):
-        return False
-    removed_invalid_fact = _filter_topology_facts_by_provenance(payload)
-    facts = payload["facts"]
-    has_expanded_endpoint = any(
-        isinstance(value.get(endpoint), dict)
-        for fact in facts
-        if isinstance(fact, dict)
-        for value in [fact.get("value")]
-        if isinstance(value, dict)
-        for endpoint in ("source", "target")
-    )
-    if not has_expanded_endpoint:
-        return removed_invalid_fact
-
-    source_system = str(payload.get("source_system") or "kubernetes")
-    entity_aliases: dict[str, bytes] = {}
-    evidence_aliases: dict[str, bytes] = {}
-    entities_by_id: dict[str, dict[str, Any]] = {}
-    primary_entity_id = ""
-    primary = payload.get("entity") if isinstance(payload.get("entity"), dict) else {}
-    primary_uid = str(primary.get("pod_uid") or primary.get("uid") or "")
-
-    for fact in facts:
-        if not isinstance(fact, dict):
-            continue
-        value = fact.get("value")
-        if not isinstance(value, dict):
-            continue
-        for endpoint in ("source", "target"):
-            entity = value.get(endpoint)
-            if not isinstance(entity, dict):
-                continue
-            entity_id = _stable_topology_alias(
-                "e:",
-                entity,
-                entity_aliases,
-            )
-            compact = {
-                "entity_id": entity_id,
-                "kind": entity.get("kind"),
-                "name": entity.get("name"),
-                "source_system": source_system,
-            }
-            for key in ("namespace", "uid", "attributes"):
-                if entity.get(key) not in (None, {}, []):
-                    compact[key] = copy.deepcopy(entity.get(key))
-            entities_by_id.setdefault(entity_id, compact)
-            if (
-                str(entity.get("kind") or "") == str(primary.get("kind") or "Pod")
-                and str(entity.get("namespace") or "")
-                == str(primary.get("namespace") or "")
-                and str(entity.get("name") or "")
-                == str(primary.get("pod") or primary.get("name") or "")
-                and primary_uid
-                and str(entity.get("uid") or "") == primary_uid
-            ):
-                primary_entity_id = entity_id
-            value[endpoint] = entity_id
-
-        ref = fact.get("ref")
-        if isinstance(ref, str) and ref and not ref.startswith("r:"):
-            fact["ref"] = _stable_topology_alias(
-                "r:",
-                ref,
-                evidence_aliases,
-            )
-
-    payload["entities"] = list(entities_by_id.values())
-    if primary_entity_id:
-        compact_primary = {
-            "kind": primary.get("kind") or "Pod",
-            "entity_id": primary_entity_id,
-        }
-        for key in ("creation_timestamp", "lifecycle_changed", "pod_ip"):
-            if primary.get(key) is not None:
-                compact_primary[key] = primary.get(key)
-        payload["entity"] = compact_primary
-    return True
 
 
 def _filter_topology_facts_by_provenance(payload: dict[str, Any]) -> bool:
@@ -584,272 +438,6 @@ def _topology_fact_has_allowed_provenance(fact: Any) -> bool:
         ):
             return False
     return True
-
-
-def _stable_topology_alias(
-    prefix: str,
-    value: Any,
-    used: dict[str, bytes],
-) -> str:
-    encoded = (
-        value.encode("utf-8")
-        if isinstance(value, str)
-        else json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    )
-    digest = hashlib.sha256(encoded).digest()
-    for byte_count in (6, 9, 12, 16, 20, 24, 28, 32):
-        token = base64.urlsafe_b64encode(
-            digest[:byte_count]
-        ).decode("ascii").rstrip("=")
-        alias = f"{prefix}{token}"
-        previous = used.get(alias)
-        if previous is None or previous == encoded:
-            used[alias] = encoded
-            return alias
-    raise ValueError("unable to allocate a unique topology alias")
-
-
-def _compact_topology_fact(payload: dict[str, Any]) -> bool:
-    facts = payload.get("facts")
-    if not isinstance(facts, list):
-        return False
-    for fact in facts:
-        if not isinstance(fact, dict):
-            continue
-        value = fact.get("value")
-        if not isinstance(value, dict):
-            continue
-        for entity_key in ("source", "target"):
-            entity = value.get(entity_key)
-            if not isinstance(entity, dict):
-                continue
-            for key in ("attributes", "uid"):
-                if key in entity:
-                    entity.pop(key)
-                    return True
-        for key in (
-            "ports",
-            "matched_pod_labels",
-            "cluster_ip",
-            "selector",
-            "source_field",
-            "relationship",
-            "relation",
-        ):
-            if key in value:
-                value.pop(key)
-                return True
-        for key in ("entity", "name", "observed_at", "confidence"):
-            if key in fact:
-                fact.pop(key)
-                return True
-    return False
-
-
-def _compact_topology_entity(payload: dict[str, Any]) -> bool:
-    entities = payload.get("entities")
-    if not isinstance(entities, list):
-        return False
-    primary = payload.get("entity")
-    primary = primary if isinstance(primary, dict) else {}
-    primary_id = str(primary.get("entity_id") or "")
-    for entity in entities:
-        if not isinstance(entity, dict):
-            continue
-        entity_id = str(entity.get("entity_id") or "")
-        for key in ("attributes", "source_system"):
-            if key in entity:
-                entity.pop(key)
-                return True
-        if entity_id != primary_id:
-            for key in ("uid", "namespace"):
-                if key in entity:
-                    entity.pop(key)
-                    return True
-    return False
-
-
-def _drop_duplicate_topology_fact(payload: dict[str, Any]) -> bool:
-    facts = payload.get("facts")
-    if not isinstance(facts, list):
-        return False
-    counts = Counter(
-        str(fact.get("relation") or "")
-        for fact in facts
-        if isinstance(fact, dict)
-    )
-    for index in range(len(facts) - 1, -1, -1):
-        fact = facts[index]
-        if not isinstance(fact, dict):
-            continue
-        relation = str(fact.get("relation") or "")
-        if relation and counts[relation] > 1:
-            facts.pop(index)
-            return True
-    return False
-
-
-def _drop_low_priority_topology_fact(payload: dict[str, Any]) -> bool:
-    facts = payload.get("facts")
-    if not isinstance(facts, list) or len(facts) <= 1:
-        return False
-    priorities = {
-        "owns_container": 3,
-        "scheduled_on": 2,
-        "owned_by": 1,
-        "selects": 0,
-    }
-    candidates = sorted(
-        range(len(facts)),
-        key=lambda index: (
-            priorities.get(
-                str(facts[index].get("relation") or "")
-                if isinstance(facts[index], dict)
-                else "",
-                4,
-            ),
-            index,
-        ),
-        reverse=True,
-    )
-    for index in candidates:
-        retained = facts[:index] + facts[index + 1 :]
-        if any(_is_direct_primary_topology_fact(payload, fact) for fact in retained):
-            facts.pop(index)
-            return True
-    return False
-
-
-def _is_direct_primary_topology_fact(
-    payload: dict[str, Any],
-    fact: Any,
-) -> bool:
-    if not isinstance(fact, dict) or fact.get("directness") != "direct":
-        return False
-    value = fact.get("value")
-    if not isinstance(value, dict):
-        return False
-    endpoints = (value.get("source"), value.get("target"))
-    primary = payload.get("entity")
-    primary = primary if isinstance(primary, dict) else {}
-    primary_alias = str(primary.get("entity_id") or "")
-    if primary_alias and primary_alias in endpoints:
-        return True
-    namespace = str(primary.get("namespace") or "")
-    pod = str(primary.get("pod") or primary.get("name") or "")
-    pod_uid = str(primary.get("pod_uid") or primary.get("uid") or "")
-    for endpoint in endpoints:
-        if not isinstance(endpoint, dict):
-            continue
-        if str(endpoint.get("kind") or "").lower() != "pod":
-            continue
-        if str(endpoint.get("namespace") or "") != namespace:
-            continue
-        if str(endpoint.get("name") or "") != pod:
-            continue
-        endpoint_uid = str(endpoint.get("uid") or "")
-        if (
-            (pod_uid and endpoint_uid == pod_uid)
-            or (not pod_uid and not endpoint_uid)
-        ):
-            return True
-    return False
-
-
-def _drop_nested_sample_value(payload: dict[str, Any]) -> bool:
-    for key in ("samples", "series"):
-        series = payload.get(key)
-        if not isinstance(series, list):
-            continue
-        for item in reversed(series):
-            if not isinstance(item, dict):
-                continue
-            values = item.get("values")
-            if isinstance(values, list) and len(values) > 3:
-                values.pop(-2)
-                return True
-    return False
-
-
-def _drop_unprotected_fact(
-    payload: dict[str, Any],
-    *,
-    minimum: int,
-) -> bool:
-    facts = payload.get("facts")
-    if not isinstance(facts, list) or len(facts) <= minimum:
-        return False
-    protected = _correlated_fact_indexes(payload)
-    for index in range(len(facts) - 1, -1, -1):
-        if index in protected:
-            continue
-        facts.pop(index)
-        return True
-    return False
-
-
-def _shrink_long_evidence_strings(payload: dict[str, Any]) -> bool:
-    candidates: list[tuple[dict[str, Any], str, str]] = []
-    protected_keys = {
-        "ref",
-        "trace_id",
-        "span_id",
-        "syscall_trace_id_request",
-        "syscall_trace_id_response",
-    }
-
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if (
-                    key not in protected_keys
-                    and isinstance(item, str)
-                    and len(item) > 240
-                ):
-                    candidates.append((value, key, item))
-                else:
-                    visit(item)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item)
-
-    for key in ("facts", "samples", "flows", "spans", "correlations", "series"):
-        visit(payload.get(key))
-    if not candidates:
-        return False
-    parent, key, value = max(candidates, key=lambda item: len(item[2]))
-    if key == "message":
-        parent.setdefault("message_original_length", len(value))
-        parent.setdefault(
-            "message_sha256",
-            hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
-        )
-        parent["message_truncated"] = True
-    elif key == "value" and parent.get("name") == "log.message":
-        parent.setdefault("value_original_length", len(value))
-        parent.setdefault(
-            "value_sha256",
-            hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
-        )
-        parent["value_truncated"] = True
-    parent[key] = _strictly_shorter_text(value, 120)
-    return True
-
-
-def _strictly_shorter_text(value: str, max_prefix: int) -> str:
-    suffix = "...[truncated]"
-    prefix_size = min(
-        max_prefix,
-        max(0, len(value) // 2),
-        max(0, len(value) - len(suffix) - 1),
-    )
-    return value[:prefix_size] + suffix
 
 
 def _sync_result_projection(payload: dict[str, Any]) -> None:
@@ -1014,45 +602,6 @@ def _sync_correlations(
             sources_by_trace.get(str(item.get("trace_id") or ""), set())
         )
     ]
-
-
-def _correlated_fact_indexes(payload: dict[str, Any]) -> set[int]:
-    facts = payload.get("facts")
-    correlations = payload.get("correlations")
-    if not isinstance(facts, list) or not isinstance(correlations, list):
-        return set()
-    protected: set[int] = set()
-    for correlation in correlations:
-        if not isinstance(correlation, dict):
-            continue
-        trace_id = str(correlation.get("trace_id") or "")
-        for source in ("deepflow", "tempo"):
-            for index, fact in enumerate(facts):
-                if (
-                    isinstance(fact, dict)
-                    and str(fact.get("trace_id") or "") == trace_id
-                    and str(fact.get("source_system") or "") == source
-                ):
-                    protected.add(index)
-                    break
-    return protected
-
-
-def _bounded_entity(value: Any) -> dict[str, Any]:
-    entity = value if isinstance(value, dict) else {}
-    bounded = {
-        "kind": _bounded_text(entity.get("kind") or "Pod", 32),
-        "namespace": _bounded_text(entity.get("namespace"), 63),
-        "pod": _bounded_text(entity.get("pod"), 253),
-    }
-    for key, limit in (
-        ("pod_uid", 128),
-        ("pod_ip", 64),
-        ("node", 253),
-    ):
-        if entity.get(key) is not None:
-            bounded[key] = _bounded_text(entity.get(key), limit)
-    return bounded
 
 
 def _bounded_text(value: Any, limit: int) -> str:

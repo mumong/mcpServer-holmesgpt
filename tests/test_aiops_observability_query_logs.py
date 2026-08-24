@@ -642,7 +642,9 @@ class LoggingQueryTests(unittest.TestCase):
             )
 
         result = __import__("json").loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertEqual(result["error"]["message"], "x" * 7000)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "elasticsearch_error")
         self.assertEqual(result["query"]["dsl"], calls[0])
@@ -688,7 +690,9 @@ class LoggingQueryTests(unittest.TestCase):
             )
 
         result = __import__("json").loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertEqual(result["error"]["message"], "x" * 7000)
         self.assertEqual(len(calls), 2)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "elasticsearch_error")
@@ -727,7 +731,7 @@ class LoggingQueryTests(unittest.TestCase):
             },
         )
 
-    def test_bounded_mcp_result_marks_log_excerpt_and_keeps_raw_reference(self):
+    def test_lossless_mcp_result_keeps_full_log_and_raw_reference(self):
         entity = {
             "kind": "Pod",
             "namespace": "ns",
@@ -770,14 +774,17 @@ class LoggingQueryTests(unittest.TestCase):
             )
 
         result = __import__("json").loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         sample = result["samples"][0]
         fact = result["facts"][0]
-        self.assertTrue(sample["message_truncated"])
+        self.assertFalse(sample["message_truncated"])
         self.assertEqual(sample["message_original_length"], len(message))
+        self.assertEqual(sample["message"], message)
         self.assertEqual(sample["raw_ref"]["document_id"], "doc-long")
-        self.assertTrue(fact["value_truncated"])
+        self.assertFalse(fact["value_truncated"])
         self.assertEqual(fact["value_original_length"], len(message))
+        self.assertEqual(fact["value"], message)
         self.assertEqual(fact["raw_ref"]["document_id"], "doc-long")
 
     def test_backend_total_and_limit_signal_drive_truncated(self):
@@ -828,6 +835,63 @@ class LoggingQueryTests(unittest.TestCase):
         self.assertTrue(result["truncated"])
         self.assertEqual(result["query"]["backend_total"]["value"], 100)
         self.assertEqual(result["query"]["backend_total"]["relation"], "gte")
+
+    def test_requested_twenty_records_publish_twenty_canonical_facts(self):
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "pod_ip": "10.0.0.2",
+            "node": "node1",
+            "containers": ["api"],
+        }
+        hits = [
+            {
+                "_index": "filebeat-test",
+                "_id": f"doc-{index}",
+                "_source": {
+                    "@timestamp": f"2026-07-21T00:10:{index:02d}Z",
+                    "message": f"record {index}",
+                    "kubernetes": {
+                        "namespace": "ns",
+                        "pod": {"name": "pod", "uid": "uid-1"},
+                        "container": {"name": "api"},
+                    },
+                },
+            }
+            for index in range(20)
+        ]
+        backend = {
+            "hits": {
+                "total": {"value": 20, "relation": "eq"},
+                "hits": hits,
+            }
+        }
+
+        with (
+            patch.object(logs, "resolve_pod_scope", return_value=(entity, None)),
+            patch.object(logs, "_query_elasticsearch", return_value=backend),
+        ):
+            result = logs.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "return every requested bounded record",
+                    "max_records": 20,
+                }
+            )
+
+        self.assertEqual(len(result["samples"]), 20)
+        self.assertEqual(len(result["facts"]), 20)
+        self.assertEqual(result["counts"], {
+            "matched": 20,
+            "retrieved": 20,
+            "normalized": 20,
+            "returned": 20,
+            "dropped": 0,
+        })
+        self.assertEqual(result["truncation"]["stages"], [])
 
 
 if __name__ == "__main__":

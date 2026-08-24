@@ -327,11 +327,21 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
                 "tempo": tempo_result.get("query_meta") or {},
             },
             "facts": facts,
-            "samples": [{"type": "span", **span} for span in spans[:3]],
+            "samples": [{"type": "span", **span} for span in spans],
             "flows": [],
             "spans": spans,
             "correlations": [],
             "evidence_refs": [fact["ref"] for fact in facts],
+            "counts": {
+                "matched": len(spans),
+                "retrieved": len(spans),
+                "normalized": len(spans),
+                "returned": len(spans),
+                "dropped": 0,
+                "flow_count": 0,
+                "span_count": len(spans),
+            },
+            "truncation": {"truncated": False, "stages": []},
             "telemetry": telemetry,
             "limitations": limitations,
             "truncated": False,
@@ -475,10 +485,10 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     correlations = _correlations(flows, spans)
     samples = [
         {"type": "flow", **flow}
-        for flow in flows[:5]
+        for flow in flows
     ] + [
         {"type": "span", **span}
-        for span in spans[:3]
+        for span in spans
     ]
     facts = _facts(
         namespace,
@@ -519,6 +529,28 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         )
     if tempo_error:
         limitations.append(tempo_error)
+    source_limit = min(8, max_records) if baseline_attempted else max_records
+    source_limit_possible = len(rows) >= source_limit
+    tracing_truncated = source_limit_possible or len(rows) > len(flows)
+    truncation_stages = []
+    if source_limit_possible:
+        truncation_stages.append(
+            {
+                "stage": "backend_query",
+                "reason": "sql_limit_reached_possible_more_rows",
+                "before": None,
+                "after": len(rows),
+            }
+        )
+    if len(rows) > len(flows):
+        truncation_stages.append(
+            {
+                "stage": "normalization",
+                "reason": "deduplicated",
+                "before": len(rows),
+                "after": len(flows),
+            }
+        )
     return {
         "ok": overall_coverage != "error",
         "status": (
@@ -562,11 +594,24 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "telemetry": telemetry,
         "limitations": limitations,
         "evidence_refs": [fact["ref"] for fact in facts],
-        "truncated": len(rows) > len(flows),
+        "counts": {
+            "matched": None,
+            "retrieved": len(rows) + len(spans),
+            "normalized": len(flows) + len(spans),
+            "returned": len(facts),
+            "dropped": max(0, len(rows) + len(spans) - len(facts)),
+            "flow_count": len(flows),
+            "span_count": len(spans),
+        },
+        "truncation": {
+            "truncated": tracing_truncated,
+            "stages": truncation_stages,
+        },
+        "truncated": tracing_truncated,
         "limits": {
             "max_records": MAX_RECORDS,
+            "requested_max_records": max_records,
             "max_traces": MAX_TRACES,
-            "max_agent_samples": 8,
         },
     }
 
@@ -743,7 +788,7 @@ def _facts(
     pod_uid: str = "",
 ) -> list[dict[str, Any]]:
     flow_facts: list[dict[str, Any]] = []
-    for flow in flows[:5]:
+    for flow in flows:
         ref = evidence_ref("deepflow", namespace, pod, flow)
         flow_facts.append(
             {
@@ -759,7 +804,7 @@ def _facts(
             }
         )
     span_facts: list[dict[str, Any]] = []
-    for span in spans[:3]:
+    for span in spans:
         attributes = (
             span.get("attributes")
             if isinstance(span.get("attributes"), dict)

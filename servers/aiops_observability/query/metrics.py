@@ -154,6 +154,7 @@ def compact_prometheus_result(payload: dict[str, Any]) -> dict[str, Any]:
     raw_series = data.get("result") if isinstance(data.get("result"), list) else []
     grouped: dict[tuple[tuple[str, str], ...], dict[str, Any]] = {}
     truncated = False
+    truncation_reasons: set[str] = set()
 
     for item in raw_series:
         if not isinstance(item, dict):
@@ -177,6 +178,8 @@ def compact_prometheus_result(payload: dict[str, Any]) -> dict[str, Any]:
             row["stats"] = _stats(original_values)
             row["sample_count"] = len(original_values)
             truncated = truncated or was_truncated
+            if was_truncated:
+                truncation_reasons.add("max_samples_per_series")
         current = grouped.get(key)
         if current is None or _point_count(row) > _point_count(current):
             grouped[key] = row
@@ -186,12 +189,14 @@ def compact_prometheus_result(payload: dict[str, Any]) -> dict[str, Any]:
     if len(series) > MAX_SERIES:
         series = series[:MAX_SERIES]
         truncated = True
+        truncation_reasons.add("max_series")
     return {
         "result_type": data.get("resultType"),
         "raw_series_count": len(raw_series),
         "series_count": len(grouped),
         "series": series,
         "truncated": truncated,
+        "truncation_reasons": sorted(truncation_reasons),
     }
 
 
@@ -407,6 +412,21 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         )
         else "related_context"
     )
+    returned_series = compact.get("series") or []
+    truncation_stages = []
+    for reason in compact.get("truncation_reasons") or []:
+        truncation_stages.append(
+            {
+                "stage": "tool_query",
+                "reason": reason,
+                "before": (
+                    compact.get("series_count")
+                    if reason == "max_series"
+                    else compact.get("raw_series_count")
+                ),
+                "after": len(returned_series),
+            }
+        )
     return {
         "ok": True,
         "status": "query_succeeded",
@@ -431,6 +451,20 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "facts": facts,
         "samples": compact.get("series") or [],
         "evidence_refs": refs,
+        "counts": {
+            "matched": compact.get("raw_series_count"),
+            "retrieved": compact.get("raw_series_count"),
+            "normalized": compact.get("series_count"),
+            "returned": len(returned_series),
+            "dropped": max(
+                0,
+                int(compact.get("series_count") or 0) - len(returned_series),
+            ),
+        },
+        "truncation": {
+            "truncated": compact["truncated"],
+            "stages": truncation_stages,
+        },
         "truncated": compact["truncated"],
         "limits": {
             "max_window_seconds": MAX_WINDOW_SECONDS,
@@ -478,7 +512,7 @@ def _facts(
     pod: str,
 ) -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
-    for item in series[:8]:
+    for item in series:
         labels = item.get("metric") if isinstance(item.get("metric"), dict) else {}
         point = item.get("value")
         if not isinstance(point, list):

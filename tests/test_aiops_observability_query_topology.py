@@ -606,7 +606,7 @@ class TopologyQueryTests(unittest.TestCase):
 
         self.assertIsNotNone(raw)
         result = json.loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         self.assertTrue(result["truncated"])
         self.assertEqual(
             result["evidence_refs"],
@@ -629,14 +629,19 @@ class TopologyQueryTests(unittest.TestCase):
             set(result["evidence_refs"]),
         )
 
-    def test_topology_bounding_strictly_decreases_long_evidence_strings(self):
-        payload = {"facts": [{"value": "x" * 241}]}
-        before = common.serialized_bytes(payload)
+    def test_lossless_serialization_does_not_mutate_long_evidence_strings(self):
+        long_value = "x" * 7000
+        payload = {
+            "dimension": "logging",
+            "facts": [{"ref": "log-long", "value": long_value}],
+            "samples": [],
+        }
 
-        changed = common._shrink_long_evidence_strings(payload)
+        result = json.loads(common.dump_bounded_result(payload))
 
-        self.assertTrue(changed)
-        self.assertLess(common.serialized_bytes(payload), before)
+        self.assertEqual(payload["facts"][0]["value"], long_value)
+        self.assertEqual(result["facts"][0]["value"], long_value)
+        self.assertFalse(result["serialization"]["response_truncated"])
 
     def test_genuinely_oversized_topology_finishes_with_coherent_four_relation_projection(self):
         payload = _oversized_topology_payload()
@@ -648,9 +653,10 @@ class TopologyQueryTests(unittest.TestCase):
         result = json.loads(raw)
 
         self.assertLess(elapsed, 1.0)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         self.assertTrue(result["ok"])
-        self.assertTrue(result["truncated"])
+        self.assertEqual(result["truncated"], payload["truncated"])
         self.assertEqual(
             {fact["relation"] for fact in result["facts"]},
             {"owned_by", "selects", "scheduled_on", "owns_container"},
@@ -681,7 +687,7 @@ class TopologyQueryTests(unittest.TestCase):
             len(result["entities"]),
         )
 
-    def test_maximum_legal_identifiers_use_stable_auditable_aliases_under_budget(self):
+    def test_maximum_legal_identifiers_remain_lossless_and_auditable(self):
         payload = _max_identifier_topology_payload()
         self.assertGreater(common.serialized_bytes(payload), 18 * 1024)
 
@@ -693,13 +699,18 @@ class TopologyQueryTests(unittest.TestCase):
 
         self.assertLess(elapsed, 1.0)
         self.assertEqual(raw, repeated_raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 18 * 1024)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertEqual(
+            result["serialization"]["serialized_bytes"],
+            len(raw.encode("utf-8")),
+        )
         self.assertIn(result["status"], {"query_succeeded", "query_partial"})
         self.assertNotEqual(
             (result.get("error") or {}).get("code"),
             "result_budget_exceeded",
         )
-        self.assertTrue(result["truncated"])
+        self.assertEqual(result["truncated"], payload["truncated"])
         self.assertEqual(result["query"], payload["query"])
         self.assertEqual(
             {fact["relation"] for fact in result["facts"]},
@@ -715,6 +726,7 @@ class TopologyQueryTests(unittest.TestCase):
             {
                 ("Pod", 253),
                 ("ReplicaSet", 253),
+                ("Deployment", 253),
                 ("Service", 63),
                 ("Node", 253),
                 ("Container", 63),
@@ -723,18 +735,15 @@ class TopologyQueryTests(unittest.TestCase):
         self.assertTrue(
             all("...[truncated]" not in entity["name"] for entity in entities.values())
         )
-        self.assertIn(result["entity"]["entity_id"], entities)
+        self.assertEqual(result["entity"], payload["entity"])
 
         fact_refs = {fact["ref"] for fact in result["facts"]}
         self.assertEqual(set(result["evidence_refs"]), fact_refs)
-        self.assertTrue(all(ref.startswith("r:") for ref in fact_refs))
-        self.assertTrue(all(len(ref) <= 32 for ref in fact_refs))
+        self.assertEqual(fact_refs, {fact["ref"] for fact in payload["facts"]})
         self.assertTrue(
             all(
-                fact["value"]["source"] in entities
-                and fact["value"]["target"] in entities
-                and fact["value"]["source"].startswith("e:")
-                and fact["value"]["target"].startswith("e:")
+                isinstance(fact["value"]["source"], dict)
+                and isinstance(fact["value"]["target"], dict)
                 for fact in result["facts"]
             )
         )

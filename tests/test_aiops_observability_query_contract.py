@@ -75,7 +75,7 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         topology = tools["query_pod_topology"]["properties"]
         self.assertEqual(topology["window_minutes"]["default"], 30)
 
-    def test_bounded_result_preserves_contract_and_stays_under_six_kib(self):
+    def test_lossless_result_preserves_complete_contract_beyond_six_kib(self):
         payload = {
             "ok": True,
             "status": "query_succeeded",
@@ -109,7 +109,14 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         raw = dump_bounded_result(payload)
         result = json.loads(raw)
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertEqual(
+            result["serialization"]["serialized_bytes"],
+            len(raw.encode("utf-8")),
+        )
+        self.assertEqual(result["limits"]["response_serialization"], "lossless")
+        self.assertNotIn("max_serialized_bytes", result["limits"])
         for key in (
             "entity",
             "purpose",
@@ -120,9 +127,10 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
             "evidence_refs",
         ):
             self.assertIn(key, result)
-        self.assertTrue(result["truncated"])
-        self.assertTrue(result["facts"])
-        self.assertTrue(result["samples"])
+        self.assertFalse(result["truncated"])
+        self.assertEqual(len(result["facts"]), 20)
+        self.assertEqual(len(result["samples"]), 20)
+        self.assertTrue(result["facts"][-1]["value"].endswith("x" * 400))
 
     def test_bounded_result_never_changes_query_and_removes_dangling_refs(self):
         sql = "SELECT " + ("very_long_column_name," * 90) + "trace_id FROM flow_log"
@@ -169,7 +177,11 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         raw = dump_bounded_result(payload)
         result = json.loads(raw)
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertEqual(result["facts"], facts)
+        self.assertEqual(len(result["samples"]), len(facts))
+        self.assertEqual(len(result["flows"]), len(facts))
         self.assertEqual(result["query"], payload["query"])
         self.assertEqual(
             result["evidence_refs"],
@@ -266,7 +278,7 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
 
         self.assertIsNotNone(raw)
         result = json.loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "input_budget_exceeded")
         self.assertFalse(result["query"]["preserved"])
@@ -279,7 +291,7 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         ).encode("utf-8")))
         handler.assert_not_called()
 
-    def test_fail_safe_bounds_query_metadata_that_alone_exceeds_result_budget(self):
+    def test_lossless_serialization_preserves_large_query_metadata(self):
         query = {"dsl": {"_source": ["field_" + ("x" * 7000)]}}
         payload = {
             "ok": False,
@@ -305,18 +317,10 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         raw = dump_bounded_result(payload)
         result = json.loads(raw)
 
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
-        self.assertFalse(result["query"]["preserved"])
-        self.assertEqual(
-            result["query"]["serialized_bytes"],
-            len(json.dumps(
-                query,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")),
-        )
-        self.assertNotIn("x" * 100, raw)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertEqual(result["query"], query)
+        self.assertIn("x" * 100, raw)
+        self.assertFalse(result["serialization"]["response_truncated"])
 
     def test_real_mcp_entrypoint_preserves_structured_array_filters(self):
         arguments = {
@@ -372,7 +376,9 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
 
         raw = content[0].text
         result = json.loads(raw)
-        self.assertLessEqual(len(raw.encode("utf-8")), 6144)
+        self.assertGreater(len(raw.encode("utf-8")), 6144)
+        self.assertFalse(result["serialization"]["response_truncated"])
+        self.assertIn("x" * 100, result["error"]["message"])
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "internal_error")
 

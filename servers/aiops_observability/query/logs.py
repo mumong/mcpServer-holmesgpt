@@ -501,13 +501,14 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             },
         )
 
-    records = _dedupe_records(
+    normalized_records = _dedupe_records(
         _hits(payload),
         requested_fields=requested_fields,
         current_pod_uid=str(entity.get("pod_uid") or ""),
         identity_basis=identity_basis,
-    )[:max_records]
-    samples = records[:8]
+    )
+    records = normalized_records[:max_records]
+    samples = records
     facts: list[dict[str, Any]] = []
     for sample in samples:
         ref = evidence_ref("log", namespace, pod, sample)
@@ -553,6 +554,32 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             json.dumps(body, sort_keys=True).encode("utf-8")
         ).hexdigest()[:16],
     }
+    backend_total = _backend_total(payload)
+    backend_matched = int(backend_total.get("value") or 0)
+    backend_retrieved = len(_hits(payload))
+    truncated = _backend_truncated(payload, len(records))
+    truncation_stages = []
+    if (
+        str(backend_total.get("relation") or "eq") != "eq"
+        or backend_matched > backend_retrieved
+    ):
+        truncation_stages.append(
+            {
+                "stage": "backend",
+                "reason": "max_hits",
+                "before": backend_matched,
+                "after": backend_retrieved,
+            }
+        )
+    if len(normalized_records) > len(records):
+        truncation_stages.append(
+            {
+                "stage": "tool_query",
+                "reason": "max_records",
+                "before": len(normalized_records),
+                "after": len(records),
+            }
+        )
     return {
         "ok": True,
         "status": "query_succeeded",
@@ -573,11 +600,22 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "facts": facts,
         "samples": samples,
         "evidence_refs": [fact["ref"] for fact in facts],
-        "truncated": _backend_truncated(payload, len(records)),
+        "counts": {
+            "matched": backend_matched,
+            "retrieved": backend_retrieved,
+            "normalized": len(normalized_records),
+            "returned": len(records),
+            "dropped": max(0, backend_matched - len(records)),
+        },
+        "truncation": {
+            "truncated": truncated,
+            "stages": truncation_stages,
+        },
+        "truncated": truncated,
         "limits": {
             "max_records": MAX_RECORDS,
+            "requested_max_records": max_records,
             "max_backend_records": MAX_BACKEND_RECORDS,
-            "max_agent_samples": 8,
             "max_keywords": MAX_KEYWORDS,
         },
     }
