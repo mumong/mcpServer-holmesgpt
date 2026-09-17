@@ -1,10 +1,11 @@
 # ============================================================================
-# MCP Server Manager RBAC 配置
+# MCP Server Manager RBAC
 # ============================================================================
-# 授予集群管理员权限，用于 Helm 安装/卸载/升级各种应用
+# Cluster-wide diagnostics are read-only. Observability backends are queried
+# through exec into existing Pods in the monitor namespace; this permission is
+# intentionally separate from Pods/create and cannot create new Pods.
 # ============================================================================
 
-# ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -14,11 +15,88 @@ metadata:
     app: mcp-server-manager
 
 ---
-# ClusterRoleBinding - 绑定到 cluster-admin（最高权限）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-server-manager-cluster-role
+  labels:
+    app: mcp-server-manager
+rules:
+  - apiGroups: [""]
+    resources:
+      - secrets
+      - pods
+      - pods/log
+      - pods/status
+      - services
+      - endpoints
+      - configmaps
+      - persistentvolumeclaims
+      - serviceaccounts
+      - events
+      - namespaces
+      - persistentvolumes
+      - nodes
+      - nodes/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - deployments/status
+      - daemonsets
+      - daemonsets/status
+      - replicasets
+      - replicasets/status
+      - statefulsets
+      - statefulsets/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - jobs/status
+      - cronjobs
+      - cronjobs/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - ingresses/status
+      - networkpolicies
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+      - horizontalpodautoscalers/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets
+      - poddisruptionbudgets/status
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingwebhookconfigurations
+      - mutatingwebhookconfigurations
+    verbs: ["get", "list", "watch"]
+
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: mcp-server-manager-cluster-admin
+  name: mcp-server-manager-cluster-binding
   labels:
     app: mcp-server-manager
 subjects:
@@ -27,5 +105,37 @@ subjects:
     namespace: mcp
 roleRef:
   kind: ClusterRole
-  name: cluster-admin          # Kubernetes 内置的超级管理员角色
+  name: mcp-server-manager-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# `create` here opens an exec subresource connection to an existing Pod. It
+# does not grant `create` on the `pods` resource itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp-server-manager-observability-exec
+  namespace: monitor
+  labels:
+    app: mcp-server-manager
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-server-manager-observability-exec
+  namespace: monitor
+  labels:
+    app: mcp-server-manager
+subjects:
+  - kind: ServiceAccount
+    name: mcp-server-manager
+    namespace: mcp
+roleRef:
+  kind: Role
+  name: mcp-server-manager-observability-exec
   apiGroup: rbac.authorization.k8s.io
