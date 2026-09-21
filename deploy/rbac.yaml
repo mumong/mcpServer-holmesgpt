@@ -1,9 +1,9 @@
 # ============================================================================
 # MCP Server Manager RBAC
 # ============================================================================
-# Cluster-wide diagnostics are read-only. Observability backends are queried
-# through exec into existing Pods in the monitor namespace; this permission is
-# intentionally separate from Pods/create and cannot create new Pods.
+# Operator-requested full cluster administration for this service account.
+# This is credential-level access, not authorization for an Agent to bypass
+# its tool allowlist or approval workflow. Revert wildcard rules to restrict it.
 # ============================================================================
 
 apiVersion: v1
@@ -22,6 +22,13 @@ metadata:
   labels:
     app: mcp-server-manager
 rules:
+  # Operator-requested cluster administration. Agent tool policy and approval
+  # remain separate; this credential can administer all Kubernetes resources.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  - nonResourceURLs: ["*"]
+    verbs: ["*"]
   - apiGroups: [""]
     resources:
       - secrets
