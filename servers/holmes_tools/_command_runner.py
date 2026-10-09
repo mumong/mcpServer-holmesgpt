@@ -96,7 +96,7 @@ def run_script(
     try:
         os.write(fd, script.encode("utf-8"))
         os.close(fd)
-        os.chmod(path, 0o700)
+        # mkstemp creates a private 0600 file; bash reads it without execute permission.
         result = subprocess.run(
             ["/bin/bash", path],
             capture_output=True,

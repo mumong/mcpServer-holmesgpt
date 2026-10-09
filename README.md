@@ -27,6 +27,7 @@ AIOps/HolmesGPT mcp_servers.url
 ```text
 mcpstander/
 ├── start.py                      # 统一启动器：读取配置，为每个 MCP 启动 mcp-proxy 子进程
+├── launch_config.py              # 纯函数：子进程环境与 proxy 命令构造
 ├── mcp_client.py                  # SSE 测试客户端
 ├── config/
 │   ├── mcp_config.yaml            # 本地默认配置
@@ -41,7 +42,11 @@ mcpstander/
 │   ├── connectivity_server.py
 │   ├── core_investigation_server.py
 │   ├── runbook_server.py
-│   └── holmes_tools/              # 工具实现：K8s / Helm / Prometheus / Runbook 等
+│   ├── aiops_case_server.py
+│   ├── aiops_observability_fine_server.py
+│   ├── aiops_observability_query_server.py
+│   ├── holmes_tools/              # 工具合同、分派和共享文本入口适配器
+│   └── aiops_observability/       # 采集器、case 存储、Pod query 与 Fact Ledger
 ├── deploy/
 │   ├── namespace.yaml
 │   ├── configmap.yaml             # K8s 部署时使用的 mcp_config.yaml
@@ -53,7 +58,10 @@ mcpstander/
 ├── docs/AIOPS_OBSERVABILITY_QUERY.md # Pod 查询与 canonical Fact Ledger 合同
 ├── Dockerfile
 ├── Makefile
-└── requirements.txt
+├── requirements.txt              # 镜像运行依赖
+├── requirements-test.txt         # 离线测试依赖
+├── tests/                        # unittest 单元与合同回归测试
+└── CONTRIBUTING.md               # 兼容性约束、开发与验证约定
 ```
 
 ---
@@ -65,12 +73,13 @@ mcpstander/
 | MCP 名称 | 端口 | 类型 | 说明 |
 |---|---:|---|---|
 | `elasticsearch` | 8088 | 第三方 npm MCP | Elasticsearch 查询，当前部署配置中为 disabled |
-| `aiops-case` | 8089 | 本地 Python MCP | 根据异常 Pod 调用 data 项目采集 Kubernetes / Prometheus / logging / DeepFlow / topology case package |
+| `aiops-case` | 8089 | 本地 Python MCP | 本仓库采集器生成、持久化并读取 Kubernetes / Prometheus / logging / DeepFlow / topology case package |
+| `aiops-observability-fine` | 8090 | 本地 Python MCP | 按维度采集 Pod 观测证据；部署配置启用，本地默认配置禁用 |
 | `test-tools` | 8091 | 本地 Python MCP | 测试工具 |
 | `helm-tools` | 8092 | 本地 Python MCP | Helm list / values / status / history / manifest 等 |
 | `k8s-core` | 8093 | 本地 Python MCP | Kubernetes describe / get / events / logs / top / jq / lineage 等 |
 | `bash_command` | 8094 | 本地 Python MCP | 受控 bash 命令与临时 Pod 调试 |
-| `prometheus` | 8095 | 本地 Python MCP | 仅供 `/query` 的 node/cluster 通用 Prometheus rules / metrics / labels / series / PromQL 查询；不得用于 `/ask` Pod 异常诊断 |
+| `prometheus` | 8095 | 本地 Python MCP | 通用 Prometheus rules / metrics / labels / series / PromQL 查询；实际工具选择由 Agent 路由与任务范围决定，不按 `/ask`、`/query` 入口禁止使用 |
 | `internet` | 8096 | 本地 Python MCP | 抓取网页内容 |
 | `connectivity_check` | 8097 | 本地 Python MCP | TCP 连通性检查 |
 | `core-investigation` | 8098 | 本地 Python MCP | 调查任务规划工具 |
@@ -106,6 +115,28 @@ diagnosis、root cause、remediation 或 evaluator label。
 ---
 
 ## 本地运行
+
+代码使用 Python 3.10+ 语法，镜像基于 Python 3.11。运行依赖锁定在
+`requirements.txt`；本仓库仅测试代码直接使用 `jsonschema`，其测试版本约束列在
+`requirements-test.txt`。运行镜像不安装该测试依赖文件，但 MCP SDK 自身也会
+间接安装 `jsonschema`，因此它不是从运行镜像中排除的包。
+
+离线验证（已有依赖时不执行安装）：
+
+```bash
+make check       # 语法检查 + 离线 unittest 合同测试
+make test-unit   # 仅离线测试
+```
+
+`make test` 保留原 SSE 客户端检查，需要运行中的服务，并非单测。
+测试会 mock 后端和命令执行，离线入口额外阻止意外网络/子进程访问；它不能
+替代真实 SSE、Kubernetes 后端或镜像验证。详见 [贡献指南](CONTRIBUTING.md)。
+
+运行边界：`start.py` 负责进程生命周期，`launch_config.py` 构造环境与命令；
+各 MCP 入口保留工具合同，通过 `holmes_tools` 分派到采集/查询实现。
+八个文本入口共用 `holmes_tools/server_adapter.py`，但保留各自参数清洗和
+异常策略。query 入口继续独立维护结构化错误与 Fact Ledger 合同。
+仓库中的 `holmes/` 为保留的历史/上游实现，不在当前 Dockerfile 打包路径中。
 
 安装依赖并启动默认配置：
 
@@ -159,7 +190,7 @@ make status
 make reload
 ```
 
-修改 `start.py`、`servers/` 或 `Dockerfile` 后，需要重新构建镜像：
+修改 `start.py`、`launch_config.py`、`servers/` 或 `Dockerfile` 后，需要重新构建镜像：
 
 ```bash
 make build-push
@@ -168,13 +199,14 @@ make deploy
 
 ### aiops-case 数据目录挂载
 
-`aiops-case` 不是无状态查询工具。它会调用 data 项目的采集脚本生成 case package，因此容器内必须能访问：
+`aiops-case` 不是无状态查询工具。本仓库的
+`servers/aiops_observability/case_builder.py` 编排采集器并写入 case package，
+不依赖 data 项目或 `AIOPS_DATASET_ROOT` / `AIOPS_COLLECT_SCRIPT`。
 
-- `AIOPS_DATASET_ROOT=/app/aiops-data`
-- `AIOPS_CASES_DIR=/app/aiops-data/cases`
-- `AIOPS_COLLECT_SCRIPT=/app/aiops-data/scripts/collect_case.py`
-
-当前研发集群的部署 YAML 使用 `hostPath` 将 master 节点上的 `/root/huhu/agent/combine-aiops-mcp/data` 挂载到 `/app/aiops-data`，并通过 `nodeSelector` 将 `mcp-server-manager` 调度到 `master`。如果迁移到生产环境，应改为镜像内置数据采集包或 PVC/NFS 挂载，不要假设每个节点都有这个本地路径。
+当前部署设置 `AIOPS_CASES_DIR=/app/aiops-cases`，将 master 节点上的
+`/root/huhu/agent/combine-aiops-mcp/aiops-cases` 以 `hostPath` 挂载到该目录，
+并用 `nodeSelector` 固定调度到 `master`；本地默认目录为 `./aiops-cases`。
+迁移存储需要单独规划数据保留与挂载方式，不要假设其他节点拥有此目录。
 
 ---
 
@@ -428,3 +460,10 @@ kubectl exec -n mcp deployment/mcp-server-manager -- \
 | 只改配置后未生效 | ConfigMap 已改但 Pod 没重启 | 执行 `make reload` |
 
 更多添加新 MCP 的步骤见 [docs/EXTENDING.md](docs/EXTENDING.md)。
+
+## License
+
+项目自有代码采用 [Apache License 2.0](LICENSE)，允许商业使用。
+第三方代码与依赖保留各自的许可证及署名，不由本项目重新授权。
+历史 `holmes/` 目录及注明移植 Holmes 的模块仍需核实上游版本和许可材料，
+不能仅凭本仓库 LICENSE 认定其第三方分发合规已完成。

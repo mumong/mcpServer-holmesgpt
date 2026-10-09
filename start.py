@@ -23,6 +23,8 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
+from launch_config import build_proxy_command, build_server_environment
+
 try:
     import yaml
 except ImportError:
@@ -111,15 +113,10 @@ class MCPServerManager:
             return None
         
         # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
-        env = os.environ.copy()
-        env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-        env["npm_config_cache"] = f"/tmp/npm-cache-{port}"
-        env["NPX_HOME"] = f"/tmp/npx-{port}"
-        for key, value in env_vars.items():
-            env[key] = str(value)
+        env = build_server_environment(os.environ, port, env_vars)
         
         # 优先使用镜像内预装的 mcp-proxy，避免 npx 并发安装
-        mcp_proxy_cmd = "mcp-proxy" if shutil.which("mcp-proxy") else "npx -y mcp-proxy"
+        proxy_available = bool(shutil.which("mcp-proxy"))
         
         # 根据类型构建内部命令
         if pkg_type == 'uv':
@@ -136,7 +133,7 @@ class MCPServerManager:
             type_icon = "📦"
         
         # 使用 mcp-proxy (支持更好的连接管理和重连)
-        cmd = f'{mcp_proxy_cmd} --port {port} --server sse -- {inner_cmd}'
+        cmd = build_proxy_command(port, inner_cmd, proxy_available=proxy_available)
         
         print(f"  🚀 {name}: 启动中... [{pkg_type}]")
         print(f"     {type_icon} 包: {package}")
@@ -145,22 +142,7 @@ class MCPServerManager:
         print(f"     🔌 端口: {port}")
         print(f"     🌐 SSE: http://localhost:{port}/sse")
         
-        try:
-            process = subprocess.Popen(
-                cmd,
-                shell=True,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
-            )
-            # 启动输出读取线程
-            threading.Thread(target=self._stream_output, args=(name, process), daemon=True).start()
-            return (name, process)
-        except Exception as e:
-            print(f"  ❌ {name}: 启动失败 - {e}")
-            return None
+        return self._spawn_server(name, cmd, env)
     
     def start_local_server(self, server: Dict) -> Tuple[str, subprocess.Popen]:
         """启动本地自定义 MCP Server"""
@@ -191,23 +173,24 @@ class MCPServerManager:
                 return None
         
         # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
-        env = os.environ.copy()
-        env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-        env["npm_config_cache"] = f"/tmp/npm-cache-{port}"
-        env["NPX_HOME"] = f"/tmp/npx-{port}"
-        for key, value in env_vars.items():
-            env[key] = str(value)
+        env = build_server_environment(os.environ, port, env_vars)
         
         # 优先使用镜像内预装的 mcp-proxy，避免 npx 并发安装
-        mcp_proxy_cmd = "mcp-proxy" if shutil.which("mcp-proxy") else "npx -y mcp-proxy"
+        proxy_available = bool(shutil.which("mcp-proxy"))
         # 构建命令 (使用当前 Python 解释器 sys.executable，兼容仅有 python3 的环境)
-        cmd = f'{mcp_proxy_cmd} --port {port} --server sse -- {sys.executable} {script_path}'
+        cmd = build_proxy_command(
+            port, f"{sys.executable} {script_path}", proxy_available=proxy_available
+        )
         
         print(f"  🚀 {name}: 启动中...")
         print(f"     路径: {script_path}")
         print(f"     端口: {port}")
         print(f"     SSE: http://localhost:{port}/sse")
         
+        return self._spawn_server(name, cmd, env)
+
+    def _spawn_server(self, name: str, cmd: str, env: Dict[str, str]):
+        """启动进程及日志线程；配置和命令构造由调用方负责。"""
         try:
             process = subprocess.Popen(
                 cmd,
@@ -224,7 +207,7 @@ class MCPServerManager:
         except Exception as e:
             print(f"  ❌ {name}: 启动失败 - {e}")
             return None
-    
+
     def start_all(self):
         """启动所有已启用的服务"""
         if not self.load_config():

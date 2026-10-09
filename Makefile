@@ -8,8 +8,9 @@ NAMESPACE := mcp
 
 VERSION ?= $(shell cat VERSION)
 DOCKER_TAG := $(VERSION)
+PYTHON ?= python3
 
-.PHONY: build push build-push deploy delete restart reload logs status sync-version
+.PHONY: build push build-push deploy delete restart reload logs status sync-version run run-local list test test-unit check check-syntax help
 
 # ============================================================
 # Docker
@@ -100,6 +101,15 @@ test:
 	@echo "🧪 Testing MCP client..."
 	python mcp_client.py
 
+# 离线检查不启动服务、不安装依赖，也不连接 Kubernetes 或后端。
+test-unit:
+	$(PYTHON) -B scripts/test_unit.py
+
+check-syntax:
+	$(PYTHON) -B scripts/check_syntax.py
+
+check: check-syntax test-unit
+
 # 显示帮助
 help:
 	@echo "MCP Server Manager - 可用命令:"
@@ -123,6 +133,9 @@ help:
 	@echo "    make run-local    - 本地部署/调试（自动依赖检查，优先 config/mcp_config.local.yaml）"
 	@echo "    make list         - 列出配置的服务"
 	@echo "    make test         - 测试客户端"
+	@echo "    make test-unit    - 离线单元/合同测试（不连接外部服务）"
+	@echo "    make check        - Python 语法检查和离线测试"
+	@echo "    make check-syntax - Python 语法检查（不生成字节码）"
 	@echo ""
 	@echo "  当前版本: $(DOCKER_TAG)"
 	@echo "  镜像地址: $(DOCKER_NAME):$(DOCKER_TAG)"

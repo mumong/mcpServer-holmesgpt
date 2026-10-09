@@ -149,18 +149,26 @@ def make_command_safe(command_str: str) -> Tuple[bool, str]:
 
 def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
     """执行 bash 命令，返回 { "success", "stdout", "stderr", "returncode" }"""
+    return _execute_command(cmd, timeout=timeout, shell=True)
+
+
+def _execute_command(cmd: str | list[str], timeout: int, *, shell: bool) -> dict:
+    """共享结果和日志合同；kubectl argv 不经宿主 shell 解释。"""
+    log_cmd = cmd if isinstance(cmd, str) else " ".join(cmd)
+    execution_options = {"shell": shell}
+    if shell:
+        execution_options["executable"] = "/bin/bash"
     t0 = time.monotonic()
     try:
         result = subprocess.run(
             cmd,
-            shell=True,
-            executable="/bin/bash",
+            **execution_options,
             capture_output=True,
             text=True,
             timeout=timeout,
         )
         elapsed = time.monotonic() - t0
-        log_command(cmd, returncode=result.returncode,
+        log_command(log_cmd, returncode=result.returncode,
                     stdout=result.stdout or "", stderr=result.stderr or "", elapsed=elapsed)
         return {
             "success": result.returncode == 0,
@@ -170,7 +178,7 @@ def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
         }
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - t0
-        log_command(cmd, returncode=-1, stderr=f"命令执行超时 ({timeout}秒)", elapsed=elapsed)
+        log_command(log_cmd, returncode=-1, stderr=f"命令执行超时 ({timeout}秒)", elapsed=elapsed)
         return {
             "success": False,
             "stdout": "",
@@ -179,7 +187,7 @@ def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
         }
     except Exception as e:
         elapsed = time.monotonic() - t0
-        log_command(cmd, returncode=-1, stderr=str(e), elapsed=elapsed, error=e)
+        log_command(log_cmd, returncode=-1, stderr=str(e), elapsed=elapsed, error=e)
         return {
             "success": False,
             "stdout": "",
@@ -327,8 +335,7 @@ async def call_tool(name: str, arguments: dict):
         ]
         if command_list:
             cmd_parts.extend(["--", *command_list])
-        full_cmd = " ".join(cmd_parts)
-        out = execute_bash_command(full_cmd, timeout=timeout)
+        out = _execute_command(cmd_parts, timeout=timeout, shell=False)
         return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
 
     return [TextContent(type="text", text=json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False))]

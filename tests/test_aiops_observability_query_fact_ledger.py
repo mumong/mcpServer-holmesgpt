@@ -28,8 +28,14 @@ _OFFICIAL_LEDGER_SCHEMA_PATH = (
     / "contracts"
     / "fact-ledger.schema.json"
 )
+_LEDGER_SCHEMA_FIXTURE_PATH = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "contracts"
+    / "fact-ledger.schema.json"
+)
 _LEDGER_SCHEMA = json.loads(
-    _OFFICIAL_LEDGER_SCHEMA_PATH.read_text(encoding="utf-8")
+    _LEDGER_SCHEMA_FIXTURE_PATH.read_text(encoding="utf-8")
 )
 
 
@@ -137,6 +143,31 @@ def _all_keys(value):
 
 
 class CanonicalFactLedgerTests(unittest.TestCase):
+    def test_schema_snapshot_characterization(self):
+        self.assertEqual(
+            hashlib.sha256(_LEDGER_SCHEMA_FIXTURE_PATH.read_bytes()).hexdigest(),
+            "091178c3eecd3d051c1291f1df0940b6de3dc9a492952e7a8bb1437b8d22d0e9",
+        )
+        Draft202012Validator.check_schema(_LEDGER_SCHEMA)
+        ledger = fact_ledger.build_fact_ledger(_result())
+        validator = Draft202012Validator(_LEDGER_SCHEMA)
+        self.assertEqual(list(validator.iter_errors(ledger)), [])
+        invalid = copy.deepcopy(ledger)
+        invalid["legacy_contract"] = True
+        self.assertEqual(
+            [(list(error.path), error.validator) for error in validator.iter_errors(invalid)],
+            [(["legacy_contract"], "const")],
+        )
+
+    def test_schema_snapshot_matches_upstream_when_available(self):
+        if not _OFFICIAL_LEDGER_SCHEMA_PATH.exists():
+            self.skipTest("Optional data checkout absent; fixed local schema still validated")
+        self.assertEqual(
+            _LEDGER_SCHEMA_FIXTURE_PATH.read_bytes(),
+            _OFFICIAL_LEDGER_SCHEMA_PATH.read_bytes(),
+            "Upstream Fact Ledger schema drifted; review the contract and refresh the test snapshot provenance explicitly",
+        )
+
     def setUp(self):
         self.assertIsNotNone(
             fact_ledger,

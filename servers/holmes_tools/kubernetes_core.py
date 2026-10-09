@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from mcp.types import Tool
 
 from ._command_runner import run_command, run_script
+from . import pod_lifecycle
 
 # 工具名 -> ( "command" | "script", 模板字符串 )
 _KUBERNETES_SPECS: Dict[str, tuple] = {
@@ -126,6 +127,8 @@ def _normalize_kubectl_args(args: dict) -> dict:
 
 
 def _run_kubernetes(name: str, arguments: dict) -> Optional[str]:
+    if name == "query_pod_lifecycle":
+        return pod_lifecycle.query(arguments)
     args = _normalize_kubectl_args(arguments)
     if name == "kubernetes_jq_query":
         return run_script(_KUBERNETES_JQ_SCRIPT, args, timeout=180)
@@ -145,6 +148,7 @@ def _input_schema(required: List[str], props: Dict[str, Any]) -> Dict[str, Any]:
 
 
 TOOLS: List[Tool] = [
+    pod_lifecycle.TOOL,
     Tool(
         name="kubectl_describe",
         description="Run kubectl describe <kind> <name> -n <namespace>. Use for resource description.",

@@ -10,13 +10,11 @@ Prometheus MCP Server
 """
 
 import asyncio
-import time
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent
 
 from holmes_tools import prometheus
-from holmes_tools.arg_utils import sanitize_arguments_for_tools
+from holmes_tools.server_adapter import call_text_tool
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result, get_logger
 
 _SERVER = "prometheus-mcp"
@@ -31,21 +29,11 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    log_tool_call(_SERVER, name, arguments)
-    t0 = time.monotonic()
-    try:
-        result = prometheus.call_tool(name, sanitize_arguments_for_tools(arguments))
-        elapsed = time.monotonic() - t0
-        if result is None:
-            result = "未知工具: {}".format(name)
-            log_tool_result(_SERVER, name, result, elapsed, error=ValueError("unknown tool"))
-        else:
-            log_tool_result(_SERVER, name, result, elapsed)
-        return [TextContent(type="text", text=result)]
-    except Exception as e:
-        elapsed = time.monotonic() - t0
-        log_tool_result(_SERVER, name, None, elapsed, error=e)
-        return [TextContent(type="text", text=f"工具调用异常: {e}")]
+    return call_text_tool(
+        _SERVER, name, arguments, prometheus.call_tool,
+        log_call=log_tool_call, log_result=log_tool_result,
+        sanitize=True, catch_errors=True,
+    )
 
 
 async def main():

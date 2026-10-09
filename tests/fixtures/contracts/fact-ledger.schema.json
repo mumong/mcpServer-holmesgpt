@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiops.local/contracts/aiops.fact-ledger.v1.schema.json",
+  "title": "AIOps Fact Ledger v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "case_id",
+    "scope_entity_ids",
+    "records",
+    "record_count",
+    "truncated",
+    "source",
+    "legacy_contract"
+  ],
+  "properties": {
+    "contract_version": {"const": "aiops.fact-ledger.v1"},
+    "case_id": {"type": "string", "minLength": 1},
+    "scope_entity_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/factRecord"}
+    },
+    "record_count": {"type": "integer", "minimum": 0},
+    "truncated": {"type": "boolean"},
+    "source": {
+      "enum": ["mcp_canonical", "robusta_legacy_adapter"]
+    },
+    "legacy_contract": {"type": "boolean"}
+  },
+  "$defs": {
+    "factRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "entity_id",
+        "entity_kind",
+        "dimension",
+        "fact_type",
+        "attribute",
+        "value",
+        "source_system",
+        "directness",
+        "confidence",
+        "evidence_refs"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "pattern": "^fact-[A-Za-z0-9_-]{8,64}$"
+        },
+        "entity_id": {"type": "string", "minLength": 1},
+        "entity_kind": {"type": "string", "minLength": 1},
+        "namespace": {"type": ["string", "null"]},
+        "entity_name": {"type": ["string", "null"]},
+        "dimension": {
+          "enum": ["kubernetes", "metrics", "logging", "tracing", "topology", "coverage"]
+        },
+        "fact_type": {
+          "enum": ["state", "configuration", "measurement", "event", "log", "span", "flow", "relationship", "coverage"]
+        },
+        "attribute": {"type": "string", "minLength": 1},
+        "value": true,
+        "unit": {"type": ["string", "null"]},
+        "timestamp": {"type": ["string", "null"]},
+        "start": {"type": ["string", "null"]},
+        "end": {"type": ["string", "null"]},
+        "source_system": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        },
+        "directness": {
+          "enum": ["direct", "derived", "related_context"]
+        },
+        "confidence": {
+          "enum": ["high", "medium", "low", "weak"]
+        },
+        "strength": {
+          "type": ["string", "null"],
+          "enum": ["critical", "strong", "supporting", "context", null]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "metadata": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"fact_type": {"not": {"const": "coverage"}}},
+            "required": ["fact_type"]
+          },
+          "then": {
+            "properties": {"evidence_refs": {"minItems": 1}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"directness": {"const": "related_context"}},
+            "required": ["directness"]
+          },
+          "then": {
+            "properties": {"confidence": {"not": {"const": "high"}}}
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"source": {"const": "mcp_canonical"}},
+        "required": ["source"]
+      },
+      "then": {
+        "properties": {"legacy_contract": {"const": false}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"source": {"const": "robusta_legacy_adapter"}},
+        "required": ["source"]
+      },
+      "then": {
+        "properties": {"legacy_contract": {"const": true}}
+      }
+    }
+  ]
+}

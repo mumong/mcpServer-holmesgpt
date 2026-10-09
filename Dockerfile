@@ -5,15 +5,13 @@ LABEL maintainer="huhu"
 LABEL description="MCP Server Manager - 将 MCP 工具转换为 SSE 端点"
 
 # 构建参数
-ARG VERSION=1.0.0
-ARG KUBECTL_VERSION=v1.29.0
-ARG HELM_VERSION=v3.14.0
+ARG KUBECTL_VERSION=v1.29.15
+ARG HELM_VERSION=v3.14.4
 ARG MCP_PROXY_VERSION=6.4.5
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    VERSION=${VERSION}
+    PYTHONDONTWRITEBYTECODE=1
 
 # 安装 Node.js 和必要工具
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 预装 mcp-proxy，避免运行时多进程并发 npx 安装导致缓存冲突/损坏
-RUN npm install -g mcp-proxy@${MCP_PROXY_VERSION}
+RUN npm_config_fetch_timeout=30000 npm_config_fetch_retries=1 npm install -g mcp-proxy@${MCP_PROXY_VERSION}
 
 # 安装 kubectl（K8s core MCP 工具依赖）
 RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
@@ -48,10 +46,15 @@ WORKDIR /app
 COPY requirements.txt .
 
 # 安装 Python 依赖
+RUN pip install --no-cache-dir --upgrade pip==26.2.0 setuptools==83.0.0 wheel==0.46.2
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 发布版本只影响元数据和代码层，不使依赖安装层失效。
+ARG VERSION=1.0.0
+ENV VERSION=${VERSION}
+
 # 复制项目文件
-COPY start.py .
+COPY start.py launch_config.py ./
 COPY mcp_client.py .
 COPY servers/ ./servers/
 

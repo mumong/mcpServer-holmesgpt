@@ -10,13 +10,11 @@ Connectivity Check MCP Server
 """
 
 import asyncio
-import time
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent
 
 from holmes_tools import connectivity
-from holmes_tools.arg_utils import sanitize_arguments_for_tools
+from holmes_tools.server_adapter import call_text_tool
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result
 
 _SERVER = "connectivity-mcp"
@@ -30,16 +28,11 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    log_tool_call(_SERVER, name, arguments)
-    t0 = time.monotonic()
-
-    result = connectivity.call_tool(name, sanitize_arguments_for_tools(arguments))
-    if result is None:
-        result = "未知工具: {}".format(name)
-
-    elapsed = time.monotonic() - t0
-    log_tool_result(_SERVER, name, result, elapsed)
-    return [TextContent(type="text", text=result)]
+    return call_text_tool(
+        _SERVER, name, arguments, connectivity.call_tool,
+        log_call=log_tool_call, log_result=log_tool_result,
+        sanitize=True, catch_errors=False,
+    )
 
 
 async def main():
