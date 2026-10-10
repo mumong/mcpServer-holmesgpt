@@ -11,6 +11,7 @@ import tempfile
 from urllib.parse import quote, urlencode
 
 from mcp.types import Tool
+from . import pod_record_query
 
 
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
@@ -53,6 +54,7 @@ TOOL = Tool(
         "with the same scope to cover further pages; a partial page is not the entire cluster. "
         "Default recent window is 10 minutes, configurable; lastState is not complete history, "
         "and restart_count_in_window is unknown, not zero."
+        + (pod_record_query.DESCRIPTION if pod_record_query.enabled() else "")
     ),
     inputSchema={
         "type": "object",
@@ -63,6 +65,7 @@ TOOL = Tool(
             "window_minutes": {"type": "integer", "minimum": 1, "maximum": 1440, "default": 10},
             "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
             "continue_token": {"type": "string", "description": "Opaque token returned by this tool; keep scope unchanged."},
+            **(pod_record_query.PROPERTIES if pod_record_query.enabled() else {}),
         },
         "additionalProperties": False,
     },
@@ -141,7 +144,10 @@ def _integer(arguments, name, default, maximum):
 
 def query(arguments):
     """Use argv and the API's paging contract, never shell templates or health filters."""
+    prepared = None
     try:
+        arguments = arguments or {}
+        prepared = pod_record_query.prepare(arguments)
         namespace, pod = (str(arguments.get(k) or "") for k in ("namespace", "pod"))
         for key, value, maximum in (("namespace", namespace, 63), ("pod", pod, 253)):
             if value and (len(value) > maximum or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", value)):
@@ -167,6 +173,9 @@ def query(arguments):
                 capture_output=True, text=True, timeout=30, check=False,
             )
         if response.returncode:
+            if prepared:
+                return json.dumps(pod_record_query.error_result(
+                    (response.stderr or response.stdout).strip(), arguments), ensure_ascii=False)
             return json.dumps({"status": "error", "coverage": "unknown", "pods": [],
                                "error": (response.stderr or response.stdout).strip()}, ensure_ascii=False)
         payload = json.loads(response.stdout)
@@ -179,7 +188,7 @@ def query(arguments):
         now = datetime.now(timezone.utc)
         metadata = payload.get("metadata") or {}
         next_token = (metadata.get("continue") or "") if not pod else ""
-        return json.dumps({
+        result = {
             "contract_version": "pod-lifecycle.v1", "status": "success",
             "source": "kubernetes", "observed_at": now.isoformat(),
             "scope": {"namespace": namespace or None, "pod": pod or None, "label_selector": selector or None},
@@ -195,6 +204,11 @@ def query(arguments):
                 "Coverage describes this page; use next_continue_token with unchanged scope for remaining Pods.",
             ],
             "pods": [project_pod(p, now, window) for p in items],
-        }, ensure_ascii=False, separators=(",", ":"))
+        }
+        if prepared:
+            result = pod_record_query.project(result, prepared, arguments)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     except (ValueError, TypeError, KeyError, AttributeError, OSError, subprocess.TimeoutExpired) as exc:
+        if isinstance(arguments, dict) and pod_record_query.QUERY_KEYS.intersection(arguments):
+            return json.dumps(pod_record_query.error_result(exc, arguments), ensure_ascii=False)
         return json.dumps({"status": "error", "coverage": "unknown", "pods": [], "error": str(exc)}, ensure_ascii=False)

@@ -36,7 +36,8 @@ async def call_tool(name: str, arguments: dict):
     return call_text_tool(
         _SERVER, name, arguments, kubernetes_core.call_tool,
         log_call=log_tool_call, log_result=log_tool_result,
-        sanitize=True, catch_errors=False,
+        # Lifecycle is an argv/data tool with typed list predicates, not a shell template.
+        sanitize=name != "query_pod_lifecycle", catch_errors=False,
     )
 
 
