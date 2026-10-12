@@ -75,7 +75,7 @@ class RecordQueryTests(unittest.TestCase):
             self.assertEqual(args, original)
 
     def test_invalid_query_fails_before_collection(self):
-        invalid = [{"fields": []}, {"where": "bad"}, {"fields": ["ready"]},
+        invalid = [{"fields": []}, {"where": "bad"}, {"fields": ["nonexistent"]},
                    {"group_by": "state"}, {"record_type": "other"},
                    {"where": [{"field": "node", "op": "gt", "value": "x"}]},
                    {"where": [{"field": "node", "op": "eq", "value": float("nan")}]},
@@ -106,7 +106,7 @@ class RecordQueryTests(unittest.TestCase):
         with patch.dict(os.environ, {"AIOPS_RECORD_RESULT_MAX_BYTES": "1024"}):
             result = self.call({"record_type": "container"})
         self.assertEqual(result["status"], "error")
-        self.assertIn("result_too_large", result["error"])
+        self.assertIn("record_too_large", result["error"])
         self.assertNotIn("rows", result)
 
     def test_generic_numeric_zero_false_null_and_late_match(self):

@@ -24,9 +24,9 @@ TOOL_DIGESTS = {
     "runbook": "511016a7b9be5cc6d5cac42afefb72963426d63407872ae78cf51d376f21d945",
     "internet": "c6e178d9ec7a1362081976e88c3206acb62f1414eb08e27f15a3064ac0d2063d",
     "connectivity": "dfcb5244181ab4c22ba61c7d7d9980e17e678c9ba868256759584e44f3c1804b",
-    # Intentional lifecycle-only addition: record_type/fields/where/match/group_by
-    # and their descriptions. test_pod_lifecycle pins every OTHER tool unchanged.
-    "k8s_core": "f02104e569c14d04e37088eb5ad5317019fc2eed60273f7441a9c4657ed328cf",
+    # Intentional lifecycle-only addition: compact state fields, Pod Ready,
+    # continuation descriptions. test_pod_lifecycle pins every OTHER tool unchanged.
+    "k8s_core": "cf4cf436201b0d767556cd9fcaabf829e146df01ef3a112be2305c32bd0a57a6",
     "core_investigation": "7f6de113428773e638b42f7c5edc295a4af2bd1d0d71d3740a7891dbd78fa3eb",
     "prometheus": "3fee53180001f3f6ac3fc06d7b614eb752320f5e5999a41449e6116f83c6773d",
     "aiops_case": "5cd12701f0e76879be0b2c2cae32394b5a443bd95f33bb71a170c94ff80867cc",

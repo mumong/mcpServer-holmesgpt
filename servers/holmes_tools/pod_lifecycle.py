@@ -148,6 +148,11 @@ def query(arguments):
     try:
         arguments = arguments or {}
         prepared = pod_record_query.prepare(arguments)
+        from .record_pages import PREFIX, read
+        if str(arguments.get('continue_token') or '').startswith(PREFIX):
+            if not prepared:
+                raise ValueError('record_cursor_query_changed: repeat original record parameters')
+            return json.dumps(read(arguments, prepared[2]), ensure_ascii=False, separators=(',', ':'))
         namespace, pod = (str(arguments.get(k) or "") for k in ("namespace", "pod"))
         for key, value, maximum in (("namespace", namespace, 63), ("pod", pod, 253)):
             if value and (len(value) > maximum or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", value)):

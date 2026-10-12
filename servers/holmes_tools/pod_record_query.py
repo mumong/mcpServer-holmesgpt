@@ -6,17 +6,17 @@ from .record_query import CONTRACT_VERSION, QUERY_KEYS, encode, select_records, 
 
 
 POD_FIELDS = ["namespace", "pod", "uid", "node", "phase", "reason", "created_at",
-              "deletion_timestamp", "conditions"]
+              "deletion_timestamp", "conditions", "ready", "condition_states"]
 CONTAINER_FIELDS = POD_FIELDS + [
-    "container", "role", "status_observed", "ready", "restart_count_total",
+    "container", "role", "status_observed", "restart_count_total",
     "restart_count_in_window", "state", "last_state", "last_termination_reason",
     "last_exit_code", "last_finished_at", "latest_observed_termination_at",
-    "termination_within_window", "resources",
+    "termination_within_window", "resources", "current_state",
 ]
 DEFAULT_FIELDS = {
-    "pod": ["namespace", "pod", "uid", "node", "phase"],
-    "container": ["namespace", "pod", "uid", "container", "role", "ready", "state",
-                  "last_termination_reason", "last_exit_code", "last_finished_at",
+    "pod": ["namespace", "pod", "uid", "node", "phase", "ready", "deletion_timestamp", "condition_states"],
+    "container": ["namespace", "pod", "uid", "container", "role", "ready", "current_state",
+                  "node", "phase", "deletion_timestamp", "last_termination_reason", "last_exit_code",
                   "restart_count_total", "restart_count_in_window", "termination_within_window"],
 }
 SOURCE_KEYS = ("contract_version", "status", "source", "observed_at", "scope", "window",
@@ -30,12 +30,17 @@ def enabled():
 
 DESCRIPTION = (
     " Optional record_type enables field selection/filtering/counts instead of the full snapshot. "
+    "pod ready is its Ready condition (true/false/null); container ready is per-container. "
+    "Defaults retain core state; condition_states is compact type/status/reason and current_state omits timestamps. "
+    "conditions and state request original detail. "
     "pod rows have Pod identity/phase/conditions only; container rows include readiness, "
     "restarts and termination plus parent Pod identity (including init/ephemeral roles). "
     "where predicates apply to the SAME row, match defaults to all. group_by computes exact "
     "counts in the chosen row unit over this page, not over missing pages. Missing values stay unknown. "
     "Example inventory count: record_type=pod, group_by=node. No record parameters preserves "
-    "the original full lifecycle response."
+    "the original full lifecycle response. Large results return partial records and next_continue_token; "
+    "repeat the SAME arguments with that continue_token to resume, without changing filters or fields. "
+    "Cursor expiry requires restarting the query; never interpret a partial page as full coverage."
 )
 PROPERTIES = {
     "record_type": {"type": "string", "enum": ["pod", "container"],
@@ -51,7 +56,7 @@ PROPERTIES = {
                        "value": {"type": ["string", "number", "boolean", "null"]}}}},
     "match": {"type": "string", "enum": ["all", "any"], "description": "Combine where conditions; defaults to all."},
     "group_by": {"type": "string", "enum": [f for f in CONTAINER_FIELDS if f not in {
-        "conditions", "state", "last_state", "resources"}],
+        "conditions", "condition_states", "state", "current_state", "last_state", "resources"}],
         "description": "Return exact count per scalar value instead of rows. Counts use record_type's unit."},
 }
 
@@ -66,7 +71,7 @@ def prepare(arguments):
         raise ValueError("record_type must be pod or container")
     query = {k: arguments[k] for k in QUERY_KEYS if k in arguments}
     parsed = validate_query(query, POD_FIELDS if kind == "pod" else CONTAINER_FIELDS, DEFAULT_FIELDS[kind])
-    if parsed.get("group_by") in {"conditions", "state", "last_state", "resources"}:
+    if parsed.get("group_by") in {"conditions", "condition_states", "state", "current_state", "last_state", "resources"}:
         raise ValueError("group_by requires a scalar field")
     limit = int(os.getenv("AIOPS_RECORD_RESULT_MAX_BYTES", "12000"))
     if not 1024 <= limit <= 65536:
@@ -78,12 +83,20 @@ def lifecycle_rows(payload, kind):
     rows = []
     for pod in payload["pods"]:
         parent = {f: pod.get("name" if f == "pod" else f) for f in POD_FIELDS}
+        conditions = pod.get('conditions') or []
+        ready = next((c.get('status') for c in conditions if c.get('type') == 'Ready'), None)
+        parent['ready'] = {'True': True, 'False': False}.get(ready)
+        parent['condition_states'] = {c['type']: {k: c[k] for k in ('status', 'reason') if c.get(k) is not None}
+                                      for c in conditions if c.get('type')}
         if kind == "pod":
             rows.append(parent)
         else:
             for container in pod.get("containers", []):
                 previous = (container.get("last_state") or {}).get("terminated") or {}
                 row = parent | {f: container.get(f) for f in CONTAINER_FIELDS if f not in POD_FIELDS}
+                row['ready'] = container.get('ready')
+                row['current_state'] = {kind: {k: v for k, v in fields.items() if k in ('reason', 'exitCode', 'signal')}
+                                        for kind, fields in (container.get('state') or {}).items()}
                 row.update(container=container.get("name"), last_termination_reason=previous.get("reason"),
                            last_exit_code=previous.get("exitCode"), last_finished_at=previous.get("finishedAt"))
                 rows.append(row)
@@ -107,11 +120,7 @@ def project(payload, prepared, arguments):
                   "coverage": payload["coverage"], "record_unit": kind,
                   "executed_query": arguments,
                   "source_metadata": {k: payload[k] for k in SOURCE_KEYS if k in payload}, **selected}
-        if len(encode(packet).encode()) > limit:
-            error = error_result("result_too_large: select fewer fields, filter or group; no records were truncated",
-                                 arguments, payload)
-            error.update(matched_rows=selected["matched_rows"], max_result_bytes=limit)
-            return error
-        return packet
+        from .record_pages import paginate
+        return paginate(packet, arguments, limit)
     except (ValueError, TypeError, KeyError) as exc:
         return error_result(exc, arguments, payload)

@@ -20,7 +20,7 @@ spec:
       serviceAccountName: mcp-server-manager
       containers:
         - name: mcp-server-manager
-          image: xnet.registry.io:8443/xnet-cloud/mcp-server-manager:7.0.34-records-20261009
+          image: xnet.registry.io:8443/xnet-cloud/mcp-server-manager:7.0.35-record-pages-20261012
           imagePullPolicy: Always
           env:
             - name: MCP_LOG_LEVEL
