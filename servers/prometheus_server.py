@@ -2,7 +2,7 @@
 """
 Prometheus MCP Server
 
-仅暴露 Prometheus 查询工具（8 个）。配置：环境变量 PROMETHEUS_URL。
+仅暴露 Prometheus 查询工具（7 个，不暴露全量规则查询）。配置：环境变量 PROMETHEUS_URL。
 
 运行方式:
     python prometheus_server.py

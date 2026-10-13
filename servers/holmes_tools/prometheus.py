@@ -136,10 +136,6 @@ def _do_post(path: str, data: Optional[Dict] = None) -> str:
         )
 
 
-def _run_list_prometheus_rules(arguments: dict) -> str:
-    return _do_get("api/v1/rules")
-
-
 def _run_get_metric_names(arguments: dict) -> str:
     return _do_get("api/v1/label/__name__/values")
 
@@ -199,7 +195,6 @@ def _run_execute_prometheus_range_query(arguments: dict) -> str:
 
 
 _HANDLERS: Dict[str, Callable[..., str]] = {
-    "list_prometheus_rules": _run_list_prometheus_rules,
     "get_metric_names": _run_get_metric_names,
     "get_label_values": _run_get_label_values,
     "get_all_labels": _run_get_all_labels,
@@ -215,11 +210,6 @@ def _schema_req(props: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
 
 
 TOOLS: List[Tool] = [
-    Tool(
-        name="list_prometheus_rules",
-        description=_query_only_description("List Prometheus recording and alerting rules."),
-        inputSchema={"type": "object", "properties": {}},
-    ),
     Tool(
         name="get_metric_names",
         description=_query_only_description("Get all metric names (label __name__ values)."),

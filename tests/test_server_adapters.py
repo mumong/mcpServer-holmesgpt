@@ -28,7 +28,8 @@ TOOL_DIGESTS = {
     # continuation descriptions. test_pod_lifecycle pins every OTHER tool unchanged.
     "k8s_core": "cf4cf436201b0d767556cd9fcaabf829e146df01ef3a112be2305c32bd0a57a6",
     "core_investigation": "7f6de113428773e638b42f7c5edc295a4af2bd1d0d71d3740a7891dbd78fa3eb",
-    "prometheus": "3fee53180001f3f6ac3fc06d7b614eb752320f5e5999a41449e6116f83c6773d",
+    # Full rule catalog deliberately disabled; all seven remaining schemas unchanged.
+    "prometheus": "8c3602a33a62f5c8ed6a466ac69be4695a054842a1b61c53bf67197827714fed",
     "aiops_case": "5cd12701f0e76879be0b2c2cae32394b5a443bd95f33bb71a170c94ff80867cc",
     "aiops_observability_fine": "458f3ba25d7b9456cc3cf86e9199961446b02d38fb7f265224ed63d309fa07a3",
 }
