@@ -10,38 +10,22 @@
 
 ---
 
-## 代码设计原则
+## 代码结构
 
-本项目遵循**高内聚、低耦合、易扩展**的设计理念，通过模块化架构简化实现复杂度：
+| 文件/目录 | 职责 |
+|-----------|------|
+| `start.py` | `MCPServerManager`：读取 YAML、启动子进程、日志（stderr）、崩溃后指数退避重启（1s 起翻倍，上限 60s） |
+| `launch_config.py` | 纯函数：子进程环境变量、`mcp-proxy` 命令拼装 |
+| `servers/*_server.py` | 各 MCP 服务入口（stdio），由 `mcp-proxy` 暴露为 SSE |
+| `servers/holmes_tools/` | 工具实现（kubectl/prometheus/runbook 等）、`server_adapter.call_text_tool_in_thread`（阻塞调用放到工作线程）、`mcp_logger`（只写 stderr） |
+| `servers/aiops_observability/` | AIOps 观测采集（collectors）与查询（query，输出 `aiops.fact-ledger.v1`） |
+| `mcp_client.py` | SSE 调试客户端 |
+| `scripts/test_unit.py` | 离线单元/合同测试（`make test-unit`） |
 
-### 核心设计原则
+### 扩展新服务类型
 
-| 原则 | 体现 | 说明 |
-|------|------|------|
-| **高内聚** | 单一职责 | 每个模块专注于一个特定功能领域 |
-| **低耦合** | 接口抽象 | 模块间通过简单接口通信，内部实现可独立变化 |
-| **易扩展** | 配置驱动 | 新增服务类型只需修改配置，无需改动核心逻辑 |
-| **简化复杂度** | 统一封装 | 使用 `supergateway` 统一处理 stdio → SSE 转换 |
-
-### 模块职责划分
-
-| 模块 | 职责 | 设计要点 |
-|------|------|----------|
-| `manager.py` | `MCPServerManager` - 配置加载、服务启停、进程监控 | 高内聚：生命周期管理集中在一处 |
-| `config.py` | 数据类 + YAML 解析 | 单一职责：配置解析与业务逻辑完全分离 |
-| `launchers.py` | 命令构建、进程启动（supergateway 封装） | 低耦合：启动逻辑独立，易于替换实现 |
-| `cli.py` | 参数解析、入口点 | 关注点分离：命令行交互与核心逻辑解耦 |
-| `paths.py` | 本地脚本路径解析 | 封装细节：路径查找逻辑内部化 |
-
-### 扩展新服务类型的步骤（体现设计优势）
-
-若需支持新的服务类型（如 golang 包）：
-
-1. 在 `config.py` 中添加新的数据类（如 `GolangServerSpec`）
-2. 在 `launchers.py` 中添加命令构建函数（如 `build_inner_cmd_for_golang()`）
-3. 在 `manager.py` 的 `_start_third_party()` 中添加类型分支
-
-**核心逻辑无需改动**，体现了开闭原则（对扩展开放，对修改封闭）。
+- 本地服务：新增 `servers/<name>_server.py`，在配置 `basicmcp` 中登记 `path`/`port`。
+- 第三方包：在 `customermcp` 中登记（`type: npm` 或 `type: uv` + `directory`）；新的包类型在 `start.py` 的 `start_package_server()` 中加分支。
 
 ---
 
@@ -49,13 +33,12 @@
 
 ### 支持的 MCP 服务类型
 
-1. **npm 包** - 通过 `npx -y <package>` 启动，`supergateway` 包装
-2. **uv 包** - Python 包，通过 `uv --directory <dir> run <package>` 启动
-3. **本地自定义服务器** - `servers/` 目录下的 Python 脚本
+1. **npm 包** - `npx -y <package>`
+2. **uv 包** - `uv --directory <dir> run <package>`
+3. **本地自定义服务器** - `servers/` 下的 Python 脚本（`sys.executable <path>`）
 
-所有类型统一通过 `supergateway` 暴露 SSE 端点：`http://localhost:<port>/sse`
-
-**设计优势**：通过 `supergateway` 统一协议转换，避免了为每种服务类型分别实现网络层的复杂性。
+所有类型统一由 `mcp-proxy`（镜像内预装，缺失时回退 `npx -y mcp-proxy`）包装：
+`mcp-proxy --port <port> --server sse -- <inner command>`，SSE 端点为 `http://localhost:<port>/sse`。
 
 ---
 
@@ -110,7 +93,7 @@ make logs
 
 1. **创建 MCP 服务** - 在 `servers/<name>_server.py` 编写，或选择第三方 npm/uv 包
 2. **添加配置** - 同步更新两个配置文件：
-   - `mcp_config.yaml`（本地开发用）
+   - `config/mcp_config.yaml`（本地开发用）
    - `deploy/configmap.yaml`（生产环境）
 3. **更新 K8s 清单** - 在以下文件中添加端口：
    - `deploy/deployment.yaml` - 添加 `containerPort`
@@ -134,17 +117,32 @@ make logs
 
 ## 环境变量
 
-管理器自动设置 `NODE_TLS_REJECT_UNAUTHORIZED=0`，以避免 Node.js HTTPS 请求时的自签名证书问题。
+- 管理器自动设置 `NODE_TLS_REJECT_UNAUTHORIZED=0`，以避免 Node.js HTTPS 请求时的自签名证书问题。
+- `MCP_TOOL_MAX_OUTPUT_BYTES`（默认 1000000）：命令类工具返回输出上限，超出时追加截断标记。
+- `MCP_TOOL_MAX_TIMEOUT_SECONDS`（默认 600）：调用方传入的 `timeout_seconds`/`timeout` 上限。
+- `MCP_LOG_LEVEL` / `MCP_LOG_FORMAT`（text|json）：服务端日志级别与格式。
 
 ---
 
 ## 当前已配置的工具
 
+以 `deploy/configmap.yaml` 为准（生产）：
+
 | 名称 | 类型 | 端口 | 路径/包 |
 |------|------|------|---------|
-| elasticsearch | npm | 8088 | `@elastic/mcp-server-elasticsearch@0.3.1` |
+| elasticsearch | npm（disabled） | 8088 | `@elastic/mcp-server-elasticsearch@0.3.1` |
+| aiops-case | 本地 | 8089 | `servers/aiops_case_server.py` |
+| aiops-observability-fine | 本地 | 8090 | `servers/aiops_observability_fine_server.py` |
 | test-tools | 本地 | 8091 | `servers/test_server.py` |
 | helm-tools | 本地 | 8092 | `servers/helm_server.py` |
+| k8s-core | 本地 | 8093 | `servers/k8s_core_server.py` |
+| bash_command | 本地 | 8094 | `servers/bash_server.py` |
+| prometheus | 本地 | 8095 | `servers/prometheus_server.py` |
+| internet | 本地 | 8096 | `servers/internet_server.py` |
+| connectivity_check | 本地 | 8097 | `servers/connectivity_server.py` |
+| core-investigation | 本地 | 8098 | `servers/core_investigation_server.py` |
+| runbook | 本地 | 8099 | `servers/runbook_server.py` |
+| aiops-observability-query | 本地 | 8100 | `servers/aiops_observability_query_server.py` |
 
 ---
 

@@ -132,11 +132,14 @@ make test-unit   # 仅离线测试
 测试会 mock 后端和命令执行，离线入口额外阻止意外网络/子进程访问；它不能
 替代真实 SSE、Kubernetes 后端或镜像验证。详见 [贡献指南](CONTRIBUTING.md)。
 
-运行边界：`start.py` 负责进程生命周期，`launch_config.py` 构造环境与命令；
+运行边界：`start.py` 负责进程生命周期（日志写 stderr；子进程退出后按 1s 起翻倍、
+上限 60s 的退避自动重启，稳定运行 60s 后重置），`launch_config.py` 构造环境与命令；
 各 MCP 入口保留工具合同，通过 `holmes_tools` 分派到采集/查询实现。
 八个文本入口共用 `holmes_tools/server_adapter.py`，但保留各自参数清洗和
-异常策略。query 入口继续独立维护结构化错误与 Fact Ledger 合同。
-仓库中的 `holmes/` 为保留的历史/上游实现，不在当前 Dockerfile 打包路径中。
+异常策略；阻塞的命令/HTTP 调用在工作线程执行，不阻塞 MCP 事件循环。
+query 入口继续独立维护结构化错误与 Fact Ledger 合同。
+命令类工具输出上限 `MCP_TOOL_MAX_OUTPUT_BYTES`（默认 1000000），调用方传入的超时
+上限 `MCP_TOOL_MAX_TIMEOUT_SECONDS`（默认 600）。
 
 安装依赖并启动默认配置：
 
@@ -465,5 +468,5 @@ kubectl exec -n mcp deployment/mcp-server-manager -- \
 
 项目自有代码采用 [Apache License 2.0](LICENSE)，允许商业使用。
 第三方代码与依赖保留各自的许可证及署名，不由本项目重新授权。
-历史 `holmes/` 目录及注明移植 Holmes 的模块仍需核实上游版本和许可材料，
+注明移植自 Holmes 的模块仍需核实上游版本和许可材料，
 不能仅凭本仓库 LICENSE 认定其第三方分发合规已完成。

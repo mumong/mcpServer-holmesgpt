@@ -47,8 +47,8 @@ make check-syntax
 - `servers/aiops_observability/`：采集器、case 持久化、观测查询及 Fact Ledger。
 
 query 入口的结构化错误及聚合入口的逐模块清洗策略不适用公共文本适配器。
-`holmes/` 保留上游/历史工具实现，但当前 Dockerfile 不打包它，当前入口也
-不依赖该包；不要仅凭类似名称把历史实现替换进运行路径。
+历史 vendored `holmes/` 目录已删除（未被引用、未打包）；注明“移植自 Holmes”的
+模块是独立实现，不要重新引入上游包到运行路径。
 
 ## Python 代码约定
 
