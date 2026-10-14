@@ -202,192 +202,194 @@ def compact_prometheus_result(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def execute(arguments: dict[str, Any]) -> dict[str, Any]:
-    namespace = str(arguments.get("namespace") or "").strip()
-    pod = str(arguments.get("pod") or "").strip()
-    purpose = str(arguments.get("purpose") or "").strip()
-    promql = str(arguments.get("promql") or "").strip()
-    query_type = str(arguments.get("query_type") or "").strip().lower()
-    base_query = {"promql": promql, "query_type": query_type}
+def _metrics_error(
+    namespace: str,
+    pod: str,
+    purpose: str,
+    code: str,
+    message: str,
+    query: dict[str, Any],
+    entity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return error_result(
+        source_system="prometheus",
+        dimension="metrics",
+        namespace=namespace,
+        pod=pod,
+        purpose=purpose,
+        code=code,
+        message=message,
+        entity=entity,
+        query=query,
+    )
 
+
+def _argument_error(
+    namespace: str,
+    pod: str,
+    purpose: str,
+    promql: str,
+    query_type: str,
+) -> tuple[str, str] | None:
+    """Stage 1: required arguments, query type and PromQL Pod scope."""
     if not namespace or not pod or not purpose or not promql:
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_arguments",
-            message="namespace, pod, purpose and promql are required",
-            query=base_query,
-        )
+        return "invalid_arguments", "namespace, pod, purpose and promql are required"
     if query_type not in {"instant", "range"}:
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_query_type",
-            message="query_type must be instant or range",
-            query=base_query,
-        )
+        return "invalid_query_type", "query_type must be instant or range"
     scope_error = validate_promql_scope(promql, namespace, pod)
     if scope_error:
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=scope_error["error_code"],
-            message=scope_error["error"],
-            query=base_query,
-        )
+        return scope_error["error_code"], scope_error["error"]
+    return None
 
-    entity, entity_error = resolve_pod_scope(
-        namespace,
-        pod,
-        arguments.get("pod_uid"),
+
+def _prepare_range_query(
+    arguments: dict[str, Any],
+    entity: dict[str, Any],
+    base_query: dict[str, Any],
+    params: dict[str, Any],
+    promql: str,
+) -> tuple[str, dict[str, Any] | None]:
+    """Stage 3: bound the range window and step.
+
+    Returns ``(path, error)``; on success ``params`` and ``base_query`` are
+    updated in place. ``error`` holds code/message/query kwargs for the error.
+    """
+    (
+        window,
+        requested_window,
+        window_adjustment,
+        window_error,
+    ) = _range_window(
+        arguments,
+        not_before=entity.get("creation_timestamp"),
     )
-    if entity_error:
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=entity_error["code"],
-            message=entity_error["message"],
-            query=base_query,
-        )
-    assert entity is not None
-
-    params: dict[str, Any] = {"query": promql}
-    path = "api/v1/query"
-    if query_type == "range":
-        (
-            window,
-            requested_window,
-            window_adjustment,
-            window_error,
-        ) = _range_window(
-            arguments,
-            not_before=entity.get("creation_timestamp"),
-        )
-        range_query = {
-            **base_query,
-            **(
-                {"requested_time_range": requested_window}
-                if requested_window is not None
-                else {}
-            ),
-            **(
-                {"time_range_adjustment": window_adjustment}
-                if window_adjustment is not None
-                else {}
-            ),
-            **(
-                {
-                    "pod_creation_timestamp": entity.get(
-                        "creation_timestamp"
-                    )
-                }
-                if entity.get("creation_timestamp")
-                else {}
-            ),
+    range_query = {
+        **base_query,
+        **(
+            {"requested_time_range": requested_window}
+            if requested_window is not None
+            else {}
+        ),
+        **(
+            {"time_range_adjustment": window_adjustment}
+            if window_adjustment is not None
+            else {}
+        ),
+        **(
+            {
+                "pod_creation_timestamp": entity.get(
+                    "creation_timestamp"
+                )
+            }
+            if entity.get("creation_timestamp")
+            else {}
+        ),
+    }
+    if window_error:
+        return "", {
+            "code": window_error["code"],
+            "message": window_error["message"],
+            "query": range_query,
         }
-        if window_error:
-            return error_result(
-                source_system="prometheus",
-                dimension="metrics",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code=window_error["code"],
-                message=window_error["message"],
-                entity=entity,
-                query=range_query,
-            )
-        assert window is not None
-        step = str(arguments.get("step") or "30s")
-        step_error = _validate_range_step(window, step, promql)
-        if step_error:
-            return error_result(
-                source_system="prometheus",
-                dimension="metrics",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code=step_error["error_code"],
-                message=step_error["error"],
-                entity=entity,
-                query={**range_query, "time_range": window, "step": step},
-            )
-        path = "api/v1/query_range"
-        params.update(
-            {
-                "start": window["start"],
-                "end": window["end"],
-                "step": step,
-            }
-        )
-        base_query.update(
-            {
-                **range_query,
-                "time_range": window,
-                "step": step,
-            }
-        )
+    assert window is not None
+    step = str(arguments.get("step") or "30s")
+    step_error = _validate_range_step(window, step, promql)
+    if step_error:
+        return "", {
+            "code": step_error["error_code"],
+            "message": step_error["error"],
+            "query": {**range_query, "time_range": window, "step": step},
+        }
+    params.update(
+        {
+            "start": window["start"],
+            "end": window["end"],
+            "step": step,
+        }
+    )
+    base_query.update(
+        {
+            **range_query,
+            "time_range": window,
+            "step": step,
+        }
+    )
+    return "api/v1/query_range", None
 
-    payload, status_code = _request_prometheus(path, params)
+
+def _response_error(
+    namespace: str,
+    pod: str,
+    entity: dict[str, Any],
+    payload: dict[str, Any],
+    query_type: str,
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Stage 5: Pod identity stability, Prometheus status and result shape."""
     current_entity, lifecycle_error = resolve_pod_scope(
         namespace,
         pod,
         entity.get("pod_uid"),
     )
     if lifecycle_error or _entity_lifecycle_changed(entity, current_entity):
-        changed_entity = {**entity, "lifecycle_changed": True}
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="pod_lifecycle_changed",
-            message=(
+        return (
+            "pod_lifecycle_changed",
+            (
                 str((lifecycle_error or {}).get("message") or "")
                 or "target Pod identity changed while the query was executing"
             ),
-            entity=changed_entity,
-            query={**base_query, "http_status": status_code},
+            {**entity, "lifecycle_changed": True},
         )
     if payload.get("status") != "success":
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="prometheus_error",
-            message=str(payload.get("error") or "Prometheus query failed"),
-            entity=entity,
-            query={**base_query, "http_status": status_code},
+        return (
+            "prometheus_error",
+            str(payload.get("error") or "Prometheus query failed"),
+            entity,
         )
     shape_error = _prometheus_result_shape_error(payload, query_type)
     if shape_error:
-        return error_result(
-            source_system="prometheus",
-            dimension="metrics",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="malformed_prometheus_response",
-            message=shape_error,
-            entity=entity,
-            query={**base_query, "http_status": status_code},
-        )
+        return "malformed_prometheus_response", shape_error, entity
+    return None
 
+
+def _value_unit(series: list[dict[str, Any]]) -> str:
+    value_units = {
+        str(item.get("unit") or "")
+        for item in series
+        if item.get("unit")
+    }
+    if len(value_units) == 1:
+        return next(iter(value_units))
+    return "mixed" if value_units else "unknown"
+
+
+def _truncation_stages(compact: dict[str, Any]) -> list[dict[str, Any]]:
+    returned_series = compact.get("series") or []
+    return [
+        {
+            "stage": "tool_query",
+            "reason": reason,
+            "before": (
+                compact.get("series_count")
+                if reason == "max_series"
+                else compact.get("raw_series_count")
+            ),
+            "after": len(returned_series),
+        }
+        for reason in compact.get("truncation_reasons") or []
+    ]
+
+
+def _success_result(
+    payload: dict[str, Any],
+    entity: dict[str, Any],
+    namespace: str,
+    pod: str,
+    purpose: str,
+    query_type: str,
+    base_query: dict[str, Any],
+    status_code: int | None,
+) -> dict[str, Any]:
+    """Stage 6: compact series into facts and the metrics result contract."""
     compact = compact_prometheus_result(payload)
     compact["series"] = _annotate_series(
         compact.get("series") or [],
@@ -397,11 +399,6 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     facts = _facts(compact.get("series") or [], namespace, pod)
     refs = [fact["ref"] for fact in facts]
     coverage = "present" if compact["raw_series_count"] else "empty"
-    value_units = {
-        str(item.get("unit") or "")
-        for item in (compact.get("series") or [])
-        if item.get("unit")
-    }
     trend_evaluable = any(
         item.get("trend_evaluable") is True
         for item in (compact.get("series") or [])
@@ -415,20 +412,6 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         else "related_context"
     )
     returned_series = compact.get("series") or []
-    truncation_stages = []
-    for reason in compact.get("truncation_reasons") or []:
-        truncation_stages.append(
-            {
-                "stage": "tool_query",
-                "reason": reason,
-                "before": (
-                    compact.get("series_count")
-                    if reason == "max_series"
-                    else compact.get("raw_series_count")
-                ),
-                "after": len(returned_series),
-            }
-        )
     return {
         "ok": True,
         "status": "query_succeeded",
@@ -441,13 +424,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "query": {
             **base_query,
             "http_status": status_code,
-            "value_unit": (
-                next(iter(value_units))
-                if len(value_units) == 1
-                else "mixed"
-                if value_units
-                else "unknown"
-            ),
+            "value_unit": _value_unit(compact.get("series") or []),
             "trend_evaluable": trend_evaluable,
         },
         "facts": facts,
@@ -465,7 +442,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         },
         "truncation": {
             "truncated": compact["truncated"],
-            "stages": truncation_stages,
+            "stages": _truncation_stages(compact),
         },
         "truncated": compact["truncated"],
         "limits": {
@@ -479,6 +456,64 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "series_count": compact.get("series_count"),
         "series": compact.get("series"),
     }
+
+
+def execute(arguments: dict[str, Any]) -> dict[str, Any]:
+    namespace = str(arguments.get("namespace") or "").strip()
+    pod = str(arguments.get("pod") or "").strip()
+    purpose = str(arguments.get("purpose") or "").strip()
+    promql = str(arguments.get("promql") or "").strip()
+    query_type = str(arguments.get("query_type") or "").strip().lower()
+    base_query = {"promql": promql, "query_type": query_type}
+
+    # Stage 1: validate arguments and PromQL scope.
+    argument_error = _argument_error(namespace, pod, purpose, promql, query_type)
+    if argument_error:
+        code, message = argument_error
+        return _metrics_error(namespace, pod, purpose, code, message, base_query)
+
+    # Stage 2: resolve the target Pod identity.
+    entity, entity_error = resolve_pod_scope(
+        namespace,
+        pod,
+        arguments.get("pod_uid"),
+    )
+    if entity_error:
+        return _metrics_error(
+            namespace, pod, purpose,
+            entity_error["code"], entity_error["message"], base_query,
+        )
+    assert entity is not None
+
+    # Stage 3: bound the range window (range queries only).
+    params: dict[str, Any] = {"query": promql}
+    path = "api/v1/query"
+    if query_type == "range":
+        path, range_error = _prepare_range_query(
+            arguments, entity, base_query, params, promql
+        )
+        if range_error:
+            return _metrics_error(
+                namespace, pod, purpose, entity=entity, **range_error
+            )
+
+    # Stage 4: query Prometheus.
+    payload, status_code = _request_prometheus(path, params)
+
+    # Stage 5: reject unstable identity or unusable responses.
+    response_error = _response_error(namespace, pod, entity, payload, query_type)
+    if response_error:
+        code, message, error_entity = response_error
+        return _metrics_error(
+            namespace, pod, purpose, code, message,
+            {**base_query, "http_status": status_code},
+            entity=error_entity,
+        )
+
+    # Stage 6: build the success contract.
+    return _success_result(
+        payload, entity, namespace, pod, purpose, query_type, base_query, status_code
+    )
 
 
 def _request_prometheus(
