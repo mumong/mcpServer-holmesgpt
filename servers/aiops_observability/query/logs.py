@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from ..collectors import _kube
+from ..collectors.elasticsearch import es_credentials
 from ..config import get_config
 from .common import (
     MAX_QUERY_METADATA_BYTES,
@@ -19,6 +20,8 @@ from .common import (
     query_metadata_exceeds_budget,
     resolve_pod_scope,
 )
+
+from .. import _http
 
 try:
     import requests
@@ -633,7 +636,7 @@ def _query_elasticsearch(body: dict[str, Any]) -> dict[str, Any]:
             f"{cfg.elasticsearch_index}/_search",
         )
         try:
-            response = requests.post(
+            response = _http.SESSION.post(
                 endpoint,
                 json=body,
                 timeout=cfg.timeout_seconds,
@@ -646,16 +649,7 @@ def _query_elasticsearch(body: dict[str, Any]) -> dict[str, Any]:
             return {"error": str(exc)}
     if not cfg.es_exec_enabled:
         return {"error": "Elasticsearch is not configured"}
-    username = _kube.secret_value(
-        cfg.es_secret_namespace,
-        cfg.es_secret_name,
-        "username",
-    )
-    password = _kube.secret_value(
-        cfg.es_secret_namespace,
-        cfg.es_secret_name,
-        "password",
-    )
+    username, password = es_credentials(cfg)
     es_pod = cfg.es_exec_pod or _kube.find_pod(
         cfg.es_exec_namespace,
         cfg.es_exec_selector,

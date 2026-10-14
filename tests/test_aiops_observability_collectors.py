@@ -288,6 +288,20 @@ class PrometheusCollectorTests(unittest.TestCase):
 
 
 class ElasticsearchCollectorTests(unittest.TestCase):
+    def setUp(self):
+        elasticsearch._credential_cache.clear()
+        self.addCleanup(elasticsearch._credential_cache.clear)
+
+    def test_exec_credentials_are_cached_for_ttl(self):
+        cfg = type("Cfg", (), {"es_secret_namespace": "ns", "es_secret_name": "es"})()
+        with patch.object(elasticsearch._kube, "secret_value", side_effect=["u", "p"]) as read:
+            self.assertEqual(elasticsearch.es_credentials(cfg), ("u", "p"))
+            self.assertEqual(elasticsearch.es_credentials(cfg), ("u", "p"))
+        self.assertEqual(read.call_count, 2)
+        with patch.object(elasticsearch.time, "monotonic", return_value=1e12), \
+             patch.object(elasticsearch._kube, "secret_value", side_effect=["u2", "p2"]):
+            self.assertEqual(elasticsearch.es_credentials(cfg), ("u2", "p2"))
+
     def test_log_evidence_contains_at_most_eight_readable_samples(self):
         hits_payload = {
             "hits": {
@@ -365,7 +379,7 @@ class ElasticsearchCollectorTests(unittest.TestCase):
 
     def test_present_and_empty_paths(self):
         hits_payload = {"hits": {"hits": [{"_source": {"@timestamp": "t", "message": "oom"}}]}}
-        with patch.object(elasticsearch.requests, "post", return_value=_Resp(hits_payload)):
+        with patch.object(elasticsearch._http.SESSION, "post", return_value=_Resp(hits_payload)):
             present = elasticsearch.collect_elasticsearch(
                 elasticsearch_url="http://es:9200", index="filebeat-*", namespace="ns", pod="p",
                 pod_uid="uid", start="s", end="e", timeout=5, max_records=10,
@@ -373,7 +387,7 @@ class ElasticsearchCollectorTests(unittest.TestCase):
         self.assertEqual(present.coverage, "present")
         self.assertTrue(present.evidence)
 
-        with patch.object(elasticsearch.requests, "post", return_value=_Resp({"hits": {"hits": []}})):
+        with patch.object(elasticsearch._http.SESSION, "post", return_value=_Resp({"hits": {"hits": []}})):
             empty = elasticsearch.collect_elasticsearch(
                 elasticsearch_url="http://es:9200", index="filebeat-*", namespace="ns", pod="p",
                 pod_uid=None, start="s", end="e", timeout=5, max_records=10,
@@ -381,7 +395,7 @@ class ElasticsearchCollectorTests(unittest.TestCase):
         self.assertEqual(empty.coverage, "empty")
 
     def test_error_when_request_raises(self):
-        with patch.object(elasticsearch.requests, "post", side_effect=RuntimeError("conn refused")):
+        with patch.object(elasticsearch._http.SESSION, "post", side_effect=RuntimeError("conn refused")):
             result = elasticsearch.collect_elasticsearch(
                 elasticsearch_url="http://es:9200", index="filebeat-*", namespace="ns", pod="p",
                 pod_uid=None, start="s", end="e", timeout=5, max_records=10,
@@ -506,7 +520,7 @@ class DeepflowCollectorTests(unittest.TestCase):
 
     def test_present_marks_weak_pod_ip_trace_correlation(self):
         payload = {"data": [{"trace_id": "abc", "l7_protocol": "HTTP"}]}
-        with patch.object(deepflow.requests, "post", return_value=_Resp(payload)):
+        with patch.object(deepflow._http.SESSION, "post", return_value=_Resp(payload)):
             result = deepflow.collect_deepflow(
                 clickhouse_url="http://ch:8123", clickhouse_database="flow_log", namespace="ns", pod="p",
                 pod_ip="10.0.0.10", node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",

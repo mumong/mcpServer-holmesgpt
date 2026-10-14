@@ -10,6 +10,7 @@ Two collection modes, in priority order:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.parse import urljoin
 
@@ -17,10 +18,30 @@ from ..config import get_config
 from ..schemas import EvidenceItem, SourceResult, evidence_id
 from . import _kube
 
+from .. import _http
+
 try:
     import requests
 except ImportError:  # pragma: no cover
     requests = None
+
+# Secret reads shell out to kubectl; credentials rarely rotate, so reuse them
+# briefly. Only complete credentials are cached so failures are retried.
+_CREDENTIAL_TTL_SECONDS = 300
+_credential_cache: dict[tuple[str, str], tuple[float, str, str]] = {}
+
+
+def es_credentials(cfg: Any) -> tuple[str | None, str | None]:
+    """Return (username, password) from the configured ES Secret, cached for a short TTL."""
+    key = (cfg.es_secret_namespace, cfg.es_secret_name)
+    cached = _credential_cache.get(key)
+    if cached and time.monotonic() - cached[0] < _CREDENTIAL_TTL_SECONDS:
+        return cached[1], cached[2]
+    username = _kube.secret_value(cfg.es_secret_namespace, cfg.es_secret_name, "username")
+    password = _kube.secret_value(cfg.es_secret_namespace, cfg.es_secret_name, "password")
+    if username and password:
+        _credential_cache[key] = (time.monotonic(), username, password)
+    return username, password
 
 
 def _query_body(namespace: str, pod: str, pod_uid: str | None, start: str, end: str, max_records: int) -> dict[str, Any]:
@@ -118,8 +139,7 @@ def _container_name(kubernetes: Any) -> str | None:
 def _collect_via_exec(
     cfg: Any, index: str, namespace: str, pod: str, pod_uid: str | None, start: str, end: str, timeout: int, max_records: int
 ) -> SourceResult:
-    username = _kube.secret_value(cfg.es_secret_namespace, cfg.es_secret_name, "username")
-    password = _kube.secret_value(cfg.es_secret_namespace, cfg.es_secret_name, "password")
+    username, password = es_credentials(cfg)
     if not username or not password:
         return SourceResult(
             "elasticsearch", "logs", "absent",
@@ -166,7 +186,7 @@ def _collect_via_http(
     body = _query_body(namespace, pod, pod_uid, start, end, max_records)
     endpoint = urljoin(elasticsearch_url if elasticsearch_url.endswith("/") else elasticsearch_url + "/", f"{index}/_search")
     try:
-        response = requests.post(endpoint, json=body, timeout=timeout, verify=False)
+        response = _http.SESSION.post(endpoint, json=body, timeout=timeout, verify=False)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:  # noqa: BLE001

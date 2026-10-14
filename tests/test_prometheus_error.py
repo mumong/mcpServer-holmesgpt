@@ -45,7 +45,7 @@ class PrometheusErrorTests(unittest.TestCase):
                 self.assertIn("execute_pod_promql", description)
 
     def test_do_get_preserves_prometheus_error_body(self):
-        with patch.object(prometheus.requests, "get", return_value=_FakeResponse()):
+        with patch.object(prometheus._SESSION, "get", return_value=_FakeResponse()):
             result = json.loads(prometheus._do_get("api/v1/query", params={"query": "bad"}))
 
         self.assertEqual(result["status"], "error")

@@ -18,6 +18,8 @@ from ..config import get_config
 from ..schemas import EvidenceItem, SourceResult, evidence_id
 from . import _kube
 
+from .. import _http
+
 try:
     import requests
 except ImportError:  # pragma: no cover
@@ -128,7 +130,7 @@ def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dic
         if requests is None:
             return None
         try:
-            resp = requests.post(cfg.deepflow_clickhouse_url, data=sql.encode("utf-8"), timeout=timeout)
+            resp = _http.SESSION.post(cfg.deepflow_clickhouse_url, data=sql.encode("utf-8"), timeout=timeout)
             resp.raise_for_status()
             return resp.json()
         except Exception:  # noqa: BLE001
@@ -314,7 +316,7 @@ def _collect_via_http(clickhouse_url: str, database: str, namespace: str, pod: s
         return SourceResult("deepflow", "tracing", "error", error="requests is not installed")
     sql = _build_sql(database, pod_ip, start, end, max_records)
     try:
-        response = requests.post(clickhouse_url, data=sql.encode("utf-8"), timeout=timeout)
+        response = _http.SESSION.post(clickhouse_url, data=sql.encode("utf-8"), timeout=timeout)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:  # noqa: BLE001

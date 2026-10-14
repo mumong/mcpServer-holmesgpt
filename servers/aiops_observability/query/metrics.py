@@ -17,6 +17,8 @@ from .common import (
     resolve_pod_scope,
 )
 
+from .. import _http
+
 try:
     import requests
 except ImportError:  # pragma: no cover
@@ -493,7 +495,7 @@ def _request_prometheus(
         path,
     )
     try:
-        response = requests.get(endpoint, params=params, timeout=cfg.timeout_seconds)
+        response = _http.SESSION.get(endpoint, params=params, timeout=cfg.timeout_seconds)
         status_code = response.status_code
         payload = response.json()
         response.raise_for_status()

@@ -8,6 +8,7 @@ Holmes 原始实现使用 requests.request(method="POST", data=payload)，此处
 import json
 import os
 import time
+from http.cookiejar import DefaultCookiePolicy
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -22,6 +23,18 @@ try:
     import requests
 except ImportError:
     requests = None
+
+
+def _new_session():
+    """Pooled connections without carrying cookies between calls (same
+    semantics as bare requests.get/post). Mirrors aiops_observability._http,
+    which this stdio server cannot import (project root is not on sys.path)."""
+    session = requests.Session()
+    session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    return session
+
+
+_SESSION = _new_session() if requests is not None else None
 
 _logger = get_logger("prometheus")
 
@@ -83,7 +96,7 @@ def _do_get(path: str, params: Optional[Dict] = None) -> str:
     url = urljoin(_get_prometheus_url(), path)
     t0 = time.monotonic()
     try:
-        r = requests.get(url, params=params or {}, timeout=_get_timeout())
+        r = _SESSION.get(url, params=params or {}, timeout=_get_timeout())
         elapsed = time.monotonic() - t0
         log_http_request("GET", url, params_or_data=params,
                          status_code=r.status_code, response_text=r.text, elapsed=elapsed)
@@ -116,7 +129,7 @@ def _do_post(path: str, data: Optional[Dict] = None) -> str:
     t0 = time.monotonic()
     try:
         # ⚠️ 关键修复：使用 data= 而非 json=，Prometheus API 要求 form-encoded POST
-        r = requests.post(url, data=data or {}, timeout=_get_timeout())
+        r = _SESSION.post(url, data=data or {}, timeout=_get_timeout())
         elapsed = time.monotonic() - t0
         log_http_request("POST", url, params_or_data=data,
                          status_code=r.status_code, response_text=r.text, elapsed=elapsed)

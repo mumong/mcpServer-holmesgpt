@@ -60,7 +60,7 @@ class AiopsFineToolTests(unittest.TestCase):
             captured["timeout"] = timeout
             return Response()
 
-        with patch.object(deepflow.requests, "post", side_effect=fake_post):
+        with patch.object(deepflow._http.SESSION, "post", side_effect=fake_post):
             result = deepflow.collect_deepflow(
                 clickhouse_url="http://clickhouse:8123",
                 clickhouse_database="flow_log",

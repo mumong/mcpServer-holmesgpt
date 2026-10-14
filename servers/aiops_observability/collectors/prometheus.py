@@ -9,6 +9,8 @@ from urllib.parse import urljoin
 
 from ..schemas import EvidenceItem, SourceResult, evidence_id
 
+from .. import _http
+
 try:
     import requests
 except ImportError:  # pragma: no cover - exercised in minimal images
@@ -20,7 +22,7 @@ def _query(url: str, query: str, timeout: int) -> dict[str, Any]:
         return {"status": "error", "error": "requests is not installed"}
     endpoint = urljoin(url if url.endswith("/") else url + "/", "api/v1/query")
     try:
-        response = requests.get(endpoint, params={"query": query}, timeout=timeout)
+        response = _http.SESSION.get(endpoint, params={"query": query}, timeout=timeout)
         response.raise_for_status()
         payload = response.json()
         return payload if isinstance(payload, dict) else {"status": "error", "error": "invalid payload"}
@@ -40,7 +42,7 @@ def _query_range(
         return {"status": "error", "error": "requests is not installed"}
     endpoint = urljoin(url if url.endswith("/") else url + "/", "api/v1/query_range")
     try:
-        response = requests.get(
+        response = _http.SESSION.get(
             endpoint,
             params={"query": query, "start": start, "end": end, "step": max(1, int(step))},
             timeout=timeout,

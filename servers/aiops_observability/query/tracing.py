@@ -12,6 +12,8 @@ from ..collectors.tempo import collect_tempo
 from ..config import get_config
 from .common import bounded_window, error_result, evidence_ref, resolve_pod_scope
 
+from .. import _http
+
 try:
     import requests
 except ImportError:  # pragma: no cover
@@ -622,7 +624,7 @@ def _query_deepflow(sql: str) -> dict[str, Any]:
         if requests is None:
             return {"error": "requests is not installed"}
         try:
-            response = requests.post(
+            response = _http.SESSION.post(
                 cfg.deepflow_clickhouse_url,
                 data=sql.encode("utf-8"),
                 timeout=cfg.timeout_seconds,
