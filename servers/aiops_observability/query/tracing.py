@@ -117,61 +117,43 @@ def build_deepflow_sql(
     )
 
 
-def execute(arguments: dict[str, Any]) -> dict[str, Any]:
-    namespace = str(arguments.get("namespace") or "").strip()
-    pod = str(arguments.get("pod") or "").strip()
-    purpose = str(arguments.get("purpose") or "").strip()
-    if not namespace or not pod or not purpose:
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_arguments",
-            message="namespace, pod and purpose are required",
-        )
-    entity, entity_error = resolve_pod_scope(
-        namespace,
-        pod,
-        arguments.get("pod_uid"),
+def _error(
+    namespace: str,
+    pod: str,
+    purpose: str,
+    code: str,
+    message: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return error_result(
+        source_system="deepflow+tempo",
+        dimension="tracing",
+        namespace=namespace,
+        pod=pod,
+        purpose=purpose,
+        code=code,
+        message=message,
+        **kwargs,
     )
-    if entity_error:
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=entity_error["code"],
-            message=entity_error["message"],
-        )
-    assert entity is not None
-    window, window_error = bounded_window(arguments)
-    if window_error:
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=window_error["code"],
-            message=window_error["message"],
-            entity=entity,
-        )
-    assert window is not None
+
+
+def _parse_filters(
+    arguments: dict[str, Any],
+    namespace: str,
+    pod: str,
+    purpose: str,
+    entity: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate model-selected trace filters; return (filters, error)."""
+
+    def fail(code: str, message: str) -> dict[str, Any]:
+        return _error(namespace, pod, purpose, code, message, entity=entity)
 
     direction = str(arguments.get("direction") or "any").strip().lower()
     if direction not in {"any", "inbound", "outbound"}:
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_direction",
-            message="direction must be any, inbound or outbound",
-            entity=entity,
+        return None, fail(
+            "invalid_direction",
+            "direction must be any, inbound or outbound",
         )
     protocols = _bounded_strings(arguments.get("protocols"), 6)
     response_statuses = _bounded_strings(arguments.get("response_statuses"), 6)
@@ -184,328 +166,253 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             trace_id = _safe_trace_id(trace_id)
         except ValueError as exc:
-            return error_result(
-                source_system="deepflow+tempo",
-                dimension="tracing",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code="invalid_trace_id",
-                message=str(exc),
-                entity=entity,
-            )
+            return None, fail("invalid_trace_id", str(exc))
     peer_ip = str(arguments.get("peer_ip") or "").strip() or None
     if peer_ip:
         try:
             peer_ip = _safe_ip(peer_ip)
         except ValueError as exc:
-            return error_result(
-                source_system="deepflow+tempo",
-                dimension="tracing",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code="invalid_peer_ip",
-                message=str(exc),
-                entity=entity,
-            )
+            return None, fail("invalid_peer_ip", str(exc))
     request_resource = str(arguments.get("request_resource") or "").strip() or None
     if request_resource and len(request_resource) > 200:
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="request_resource_too_long",
-            message="request_resource must be at most 200 characters",
-            entity=entity,
+        return None, fail(
+            "request_resource_too_long",
+            "request_resource must be at most 200 characters",
         )
-    max_records = min(MAX_RECORDS, max(1, int(arguments.get("max_records") or 20)))
-    pod_ip = str(entity.get("pod_ip") or "").strip()
-    include_tempo = bool(arguments.get("include_tempo", True))
-    service = str(arguments.get("service") or "").strip() or None
-    if not pod_ip:
-        tempo_result = _tempo_not_executed(
-            "include_tempo=false"
-            if not include_tempo
-            else "no_valid_trace_ids"
-        )
-        tempo_trace_ids = [trace_id] if trace_id and include_tempo else []
-        if tempo_trace_ids:
-            tempo_result = _query_tempo(
-                namespace=namespace,
-                pod=pod,
-                trace_ids=tempo_trace_ids,
-                service=service,
-            )
-        spans = _dedupe_records(tempo_result.get("spans") or [])
-        tempo_coverage = str(tempo_result.get("coverage") or "empty")
-        tempo_error = str(tempo_result.get("error") or "").strip() or None
-        telemetry = {
-            "deepflow": {
-                "coverage": "absent",
-                "error": "pod_ip is empty",
-            },
-            "tempo": {
-                "coverage": tempo_coverage,
-                "executed": bool(tempo_result.get("executed")),
-                "query_meta": tempo_result.get("query_meta") or {},
-                **(
-                    {"reason": tempo_result.get("reason")}
-                    if tempo_result.get("reason")
-                    else {}
-                ),
-                **({"error": tempo_error} if tempo_error else {}),
-            },
-        }
-        limitations = [
-            (
-                "Pod IP is empty; Tempo spans were queried by the explicitly "
-                "supplied trace ID, but no Pod-scoped DeepFlow flow association "
-                "can be verified"
-                if trace_id
-                else
-                "pod_ip is empty; Pod-scoped DeepFlow flow lookup cannot be executed"
-            )
-        ]
-        if tempo_error:
-            limitations.append(tempo_error)
-        if tempo_coverage == "error":
-            result = error_result(
-                source_system="deepflow+tempo",
-                dimension="tracing",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code="tempo_error",
-                message=tempo_error or "Tempo query failed",
-                entity=entity,
-                query={
-                    "sql": None,
-                    "time_range": window,
-                    "pod_ip": None,
-                    "tempo_trace_ids": tempo_trace_ids,
-                    "tempo": tempo_result.get("query_meta") or {},
-                },
-            )
-            result.update(
-                {
-                    "directness": "related_context",
-                    "telemetry": telemetry,
-                    "limitations": limitations,
-                    "flows": [],
-                    "spans": [],
-                    "correlations": [],
-                }
-            )
-            return result
-        facts = _facts(
-            namespace,
-            pod,
-            [],
-            spans,
-            span_directness="related_context",
-            pod_uid=str(entity.get("pod_uid") or ""),
-        )
-        return {
-            "ok": True,
-            "status": "query_succeeded",
-            "source_system": "deepflow+tempo",
-            "dimension": "tracing",
-            "entity": entity,
-            "purpose": purpose,
-            "coverage": (
-                "present"
-                if spans
-                else (tempo_coverage if trace_id else "empty")
-            ),
-            "directness": "related_context" if trace_id else "direct",
-            "query": {
-                "sql": None,
-                "time_range": window,
-                "pod_ip": None,
-                "tempo_trace_ids": tempo_trace_ids,
-                "tempo": tempo_result.get("query_meta") or {},
-            },
-            "facts": facts,
-            "samples": [{"type": "span", **span} for span in spans],
-            "flows": [],
-            "spans": spans,
-            "correlations": [],
-            "evidence_refs": [fact["ref"] for fact in facts],
-            "counts": {
-                "matched": len(spans),
-                "retrieved": len(spans),
-                "normalized": len(spans),
-                "returned": len(spans),
-                "dropped": 0,
-                "flow_count": 0,
-                "span_count": len(spans),
-            },
-            "truncation": {"truncated": False, "stages": []},
-            "telemetry": telemetry,
-            "limitations": limitations,
-            "truncated": False,
-            "limits": {"max_records": MAX_RECORDS, "max_traces": MAX_TRACES},
-        }
+    return {
+        "direction": direction,
+        "protocols": protocols,
+        "response_statuses": response_statuses,
+        "response_codes": response_codes,
+        "trace_id": trace_id,
+        "peer_ip": peer_ip,
+        "request_resource": request_resource,
+        "max_records": min(MAX_RECORDS, max(1, int(arguments.get("max_records") or 20))),
+    }, None
 
-    try:
-        min_duration_us = (
-            int(arguments["min_duration_us"])
-            if arguments.get("min_duration_us") is not None
-            else None
-        )
-        sql = build_deepflow_sql(
-            database=get_config().deepflow_clickhouse_database,
-            pod_ip=pod_ip,
-            start=window["start"],
-            end=window["end"],
-            direction=direction,
-            protocols=protocols,
-            response_codes=response_codes,
-            response_statuses=response_statuses,
-            min_duration_us=min_duration_us,
-            peer_ip=peer_ip,
-            trace_id=trace_id,
-            request_resource=request_resource,
-            max_records=max_records,
-        )
-    except (TypeError, ValueError) as exc:
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_trace_filter",
-            message=str(exc),
-            entity=entity,
-        )
-    payload = _query_deepflow(sql)
-    if payload.get("error"):
-        return error_result(
-            source_system="deepflow+tempo",
-            dimension="tracing",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="deepflow_error",
-            message=str(payload.get("error")),
-            entity=entity,
-            query={"sql": sql, "time_range": window},
-        )
-    filtered_rows = (
-        payload.get("data")
-        if isinstance(payload.get("data"), list)
-        else []
-    )
-    rows = filtered_rows
-    baseline_sql: str | None = None
-    baseline_error: str | None = None
-    baseline_attempted = False
-    semantic_filters_present = bool(
-        protocols
-        or response_codes
-        or response_statuses
-        or min_duration_us is not None
-        or peer_ip
-        or request_resource
-    )
-    if (
-        not filtered_rows
-        and semantic_filters_present
-        and not trace_id
-    ):
-        baseline_attempted = True
-        baseline_sql = build_deepflow_sql(
-            database=get_config().deepflow_clickhouse_database,
-            pod_ip=pod_ip,
-            start=window["start"],
-            end=window["end"],
-            direction="any",
-            protocols=[],
-            response_codes=[],
-            response_statuses=[],
-            min_duration_us=None,
-            peer_ip=None,
-            trace_id=None,
-            request_resource=None,
-            max_records=min(8, max_records),
-        )
-        baseline_payload = _query_deepflow(baseline_sql)
-        if baseline_payload.get("error"):
-            baseline_error = str(baseline_payload.get("error"))
-        elif isinstance(baseline_payload.get("data"), list):
-            rows = baseline_payload.get("data") or []
 
-    related_baseline = baseline_attempted and bool(rows)
-    flows = _dedupe_records(
-        [_flow(row) for row in rows[:max_records] if isinstance(row, dict)]
-    )
-    trace_ids, invalid_trace_id_count = _validated_trace_ids(
-        ([trace_id] if trace_id else [])
-        + [
-            str(flow.get("trace_id") or "")
-            for flow in flows
-            if flow.get("trace_id")
-        ]
-    )
-    tempo_result = _tempo_not_executed(
-        "include_tempo=false"
-        if not include_tempo
-        else "no_valid_trace_ids"
-    )
+def _tempo_for_trace_ids(
+    namespace: str,
+    pod: str,
+    trace_ids: list[str],
+    *,
+    include_tempo: bool,
+    service: str | None,
+) -> dict[str, Any]:
     if include_tempo and trace_ids:
-        tempo_result = _query_tempo(
+        return _query_tempo(
             namespace=namespace,
             pod=pod,
             trace_ids=trace_ids,
             service=service,
         )
+    return _tempo_not_executed(
+        "include_tempo=false"
+        if not include_tempo
+        else "no_valid_trace_ids"
+    )
+
+
+def _tempo_telemetry(
+    tempo_result: dict[str, Any],
+    tempo_error: str | None,
+) -> dict[str, Any]:
+    return {
+        "coverage": str(tempo_result.get("coverage") or "empty"),
+        "executed": bool(tempo_result.get("executed")),
+        "query_meta": tempo_result.get("query_meta") or {},
+        **(
+            {"reason": tempo_result.get("reason")}
+            if tempo_result.get("reason")
+            else {}
+        ),
+        **({"error": tempo_error} if tempo_error else {}),
+    }
+
+
+def _execute_without_pod_ip(
+    *,
+    namespace: str,
+    pod: str,
+    purpose: str,
+    entity: dict[str, Any],
+    window: dict[str, Any],
+    trace_id: str | None,
+    include_tempo: bool,
+    service: str | None,
+) -> dict[str, Any]:
+    """No Pod IP: DeepFlow cannot run; only an explicit trace ID reaches Tempo."""
+    tempo_trace_ids = [trace_id] if trace_id and include_tempo else []
+    tempo_result = _tempo_for_trace_ids(
+        namespace,
+        pod,
+        tempo_trace_ids,
+        include_tempo=include_tempo,
+        service=service,
+    )
     spans = _dedupe_records(tempo_result.get("spans") or [])
+    tempo_coverage = str(tempo_result.get("coverage") or "empty")
     tempo_error = str(tempo_result.get("error") or "").strip() or None
     telemetry = {
         "deepflow": {
-            "coverage": "present" if flows else "empty",
-            "directness": (
-                "related_context" if related_baseline else "direct"
-            ),
+            "coverage": "absent",
+            "error": "pod_ip is empty",
         },
-        "tempo": {
-            "coverage": str(tempo_result.get("coverage") or "empty"),
-            "executed": bool(tempo_result.get("executed")),
-            "query_meta": tempo_result.get("query_meta") or {},
-            **(
-                {"reason": tempo_result.get("reason")}
-                if tempo_result.get("reason")
-                else {}
-            ),
-            **({"error": tempo_error} if tempo_error else {}),
-        },
+        "tempo": _tempo_telemetry(tempo_result, tempo_error),
     }
-    correlations = _correlations(flows, spans)
-    samples = [
-        {"type": "flow", **flow}
-        for flow in flows
-    ] + [
-        {"type": "span", **span}
-        for span in spans
+    limitations = [
+        (
+            "Pod IP is empty; Tempo spans were queried by the explicitly "
+            "supplied trace ID, but no Pod-scoped DeepFlow flow association "
+            "can be verified"
+            if trace_id
+            else
+            "pod_ip is empty; Pod-scoped DeepFlow flow lookup cannot be executed"
+        )
     ]
+    if tempo_error:
+        limitations.append(tempo_error)
+    query = {
+        "sql": None,
+        "time_range": window,
+        "pod_ip": None,
+        "tempo_trace_ids": tempo_trace_ids,
+        "tempo": tempo_result.get("query_meta") or {},
+    }
+    if tempo_coverage == "error":
+        result = _error(
+            namespace,
+            pod,
+            purpose,
+            "tempo_error",
+            tempo_error or "Tempo query failed",
+            entity=entity,
+            query=query,
+        )
+        result.update(
+            {
+                "directness": "related_context",
+                "telemetry": telemetry,
+                "limitations": limitations,
+                "flows": [],
+                "spans": [],
+                "correlations": [],
+            }
+        )
+        return result
     facts = _facts(
         namespace,
         pod,
-        flows,
+        [],
         spans,
-        span_directness=(
-            "related_context" if related_baseline else "direct"
-        ),
-        flow_directness=(
-            "related_context" if related_baseline else "direct"
-        ),
+        span_directness="related_context",
         pod_uid=str(entity.get("pod_uid") or ""),
     )
-    tempo_coverage = str(tempo_result.get("coverage") or "empty")
+    return {
+        "ok": True,
+        "status": "query_succeeded",
+        "source_system": "deepflow+tempo",
+        "dimension": "tracing",
+        "entity": entity,
+        "purpose": purpose,
+        "coverage": (
+            "present"
+            if spans
+            else (tempo_coverage if trace_id else "empty")
+        ),
+        "directness": "related_context" if trace_id else "direct",
+        "query": query,
+        "facts": facts,
+        "samples": [{"type": "span", **span} for span in spans],
+        "flows": [],
+        "spans": spans,
+        "correlations": [],
+        "evidence_refs": [fact["ref"] for fact in facts],
+        "counts": {
+            "matched": len(spans),
+            "retrieved": len(spans),
+            "normalized": len(spans),
+            "returned": len(spans),
+            "dropped": 0,
+            "flow_count": 0,
+            "span_count": len(spans),
+        },
+        "truncation": {"truncated": False, "stages": []},
+        "telemetry": telemetry,
+        "limitations": limitations,
+        "truncated": False,
+        "limits": {"max_records": MAX_RECORDS, "max_traces": MAX_TRACES},
+    }
+
+
+def _run_baseline(
+    *,
+    pod_ip: str,
+    window: dict[str, Any],
+    max_records: int,
+) -> tuple[str, list[Any] | None, str | None]:
+    """Bounded Pod-scoped baseline query; return (sql, rows or None, error)."""
+    baseline_sql = build_deepflow_sql(
+        database=get_config().deepflow_clickhouse_database,
+        pod_ip=pod_ip,
+        start=window["start"],
+        end=window["end"],
+        direction="any",
+        protocols=[],
+        response_codes=[],
+        response_statuses=[],
+        min_duration_us=None,
+        peer_ip=None,
+        trace_id=None,
+        request_resource=None,
+        max_records=min(8, max_records),
+    )
+    baseline_payload = _query_deepflow(baseline_sql)
+    if baseline_payload.get("error"):
+        return baseline_sql, None, str(baseline_payload.get("error"))
+    if isinstance(baseline_payload.get("data"), list):
+        return baseline_sql, baseline_payload.get("data") or [], None
+    return baseline_sql, None, None
+
+
+def _build_filtered_sql(
+    arguments: dict[str, Any],
+    filters: dict[str, Any],
+    *,
+    pod_ip: str,
+    window: dict[str, Any],
+) -> tuple[str, int | None]:
+    """Build the model-filtered DeepFlow SQL; raises TypeError/ValueError."""
+    min_duration_us = (
+        int(arguments["min_duration_us"])
+        if arguments.get("min_duration_us") is not None
+        else None
+    )
+    sql = build_deepflow_sql(
+        database=get_config().deepflow_clickhouse_database,
+        pod_ip=pod_ip,
+        start=window["start"],
+        end=window["end"],
+        direction=filters["direction"],
+        protocols=filters["protocols"],
+        response_codes=filters["response_codes"],
+        response_statuses=filters["response_statuses"],
+        min_duration_us=min_duration_us,
+        peer_ip=filters["peer_ip"],
+        trace_id=filters["trace_id"],
+        request_resource=filters["request_resource"],
+        max_records=filters["max_records"],
+    )
+    return sql, min_duration_us
+
+
+def _overall_coverage(
+    *,
+    flows: list[Any],
+    spans: list[Any],
+    related_baseline: bool,
+    tempo_coverage: str,
+) -> str:
     overall_coverage = "present" if flows or spans else "empty"
     if related_baseline and (flows or spans):
         overall_coverage = "weak"
@@ -513,6 +420,16 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         overall_coverage = "weak"
     elif tempo_coverage == "error":
         overall_coverage = "weak" if flows or spans else "error"
+    return overall_coverage
+
+
+def _flow_limitations(
+    *,
+    related_baseline: bool,
+    baseline_attempted: bool,
+    baseline_error: str | None,
+    tempo_error: str | None,
+) -> list[str]:
     limitations: list[str] = []
     if related_baseline:
         limitations.append(
@@ -531,11 +448,16 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         )
     if tempo_error:
         limitations.append(tempo_error)
-    source_limit = min(8, max_records) if baseline_attempted else max_records
-    source_limit_possible = len(rows) >= source_limit
-    tracing_truncated = source_limit_possible or len(rows) > len(flows)
+    return limitations
+
+
+def _truncation_stages(
+    rows: list[Any],
+    flows: list[Any],
+    source_limit: int,
+) -> list[dict[str, Any]]:
     truncation_stages = []
-    if source_limit_possible:
+    if len(rows) >= source_limit:
         truncation_stages.append(
             {
                 "stage": "backend_query",
@@ -553,6 +475,177 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
                 "after": len(flows),
             }
         )
+    return truncation_stages
+
+
+def execute(arguments: dict[str, Any]) -> dict[str, Any]:
+    namespace = str(arguments.get("namespace") or "").strip()
+    pod = str(arguments.get("pod") or "").strip()
+    purpose = str(arguments.get("purpose") or "").strip()
+    if not namespace or not pod or not purpose:
+        return _error(
+            namespace,
+            pod,
+            purpose,
+            "invalid_arguments",
+            "namespace, pod and purpose are required",
+        )
+    entity, entity_error = resolve_pod_scope(
+        namespace,
+        pod,
+        arguments.get("pod_uid"),
+    )
+    if entity_error:
+        return _error(
+            namespace, pod, purpose, entity_error["code"], entity_error["message"]
+        )
+    assert entity is not None
+    window, window_error = bounded_window(arguments)
+    if window_error:
+        return _error(
+            namespace,
+            pod,
+            purpose,
+            window_error["code"],
+            window_error["message"],
+            entity=entity,
+        )
+    assert window is not None
+
+    filters, filter_error = _parse_filters(arguments, namespace, pod, purpose, entity)
+    if filter_error:
+        return filter_error
+    assert filters is not None
+    trace_id = filters["trace_id"]
+    max_records = filters["max_records"]
+    pod_ip = str(entity.get("pod_ip") or "").strip()
+    include_tempo = bool(arguments.get("include_tempo", True))
+    service = str(arguments.get("service") or "").strip() or None
+    if not pod_ip:
+        return _execute_without_pod_ip(
+            namespace=namespace,
+            pod=pod,
+            purpose=purpose,
+            entity=entity,
+            window=window,
+            trace_id=trace_id,
+            include_tempo=include_tempo,
+            service=service,
+        )
+
+    # Stage 1: filtered DeepFlow query, with a bounded baseline fallback.
+    try:
+        sql, min_duration_us = _build_filtered_sql(
+            arguments, filters, pod_ip=pod_ip, window=window
+        )
+    except (TypeError, ValueError) as exc:
+        return _error(
+            namespace, pod, purpose, "invalid_trace_filter", str(exc), entity=entity
+        )
+    payload = _query_deepflow(sql)
+    if payload.get("error"):
+        return _error(
+            namespace,
+            pod,
+            purpose,
+            "deepflow_error",
+            str(payload.get("error")),
+            entity=entity,
+            query={"sql": sql, "time_range": window},
+        )
+    filtered_rows = (
+        payload.get("data")
+        if isinstance(payload.get("data"), list)
+        else []
+    )
+    rows = filtered_rows
+    baseline_sql: str | None = None
+    baseline_error: str | None = None
+    baseline_attempted = False
+    semantic_filters_present = bool(
+        filters["protocols"]
+        or filters["response_codes"]
+        or filters["response_statuses"]
+        or min_duration_us is not None
+        or filters["peer_ip"]
+        or filters["request_resource"]
+    )
+    if (
+        not filtered_rows
+        and semantic_filters_present
+        and not trace_id
+    ):
+        baseline_attempted = True
+        baseline_sql, baseline_rows, baseline_error = _run_baseline(
+            pod_ip=pod_ip, window=window, max_records=max_records
+        )
+        if baseline_rows is not None:
+            rows = baseline_rows
+
+    # Stage 2: normalize flows and correlate Tempo spans by trace ID.
+    related_baseline = baseline_attempted and bool(rows)
+    directness = "related_context" if related_baseline else "direct"
+    flows = _dedupe_records(
+        [_flow(row) for row in rows[:max_records] if isinstance(row, dict)]
+    )
+    trace_ids, invalid_trace_id_count = _validated_trace_ids(
+        ([trace_id] if trace_id else [])
+        + [
+            str(flow.get("trace_id") or "")
+            for flow in flows
+            if flow.get("trace_id")
+        ]
+    )
+    tempo_result = _tempo_for_trace_ids(
+        namespace,
+        pod,
+        trace_ids,
+        include_tempo=include_tempo,
+        service=service,
+    )
+    spans = _dedupe_records(tempo_result.get("spans") or [])
+    tempo_error = str(tempo_result.get("error") or "").strip() or None
+    telemetry = {
+        "deepflow": {
+            "coverage": "present" if flows else "empty",
+            "directness": directness,
+        },
+        "tempo": _tempo_telemetry(tempo_result, tempo_error),
+    }
+    correlations = _correlations(flows, spans)
+    samples = [
+        {"type": "flow", **flow}
+        for flow in flows
+    ] + [
+        {"type": "span", **span}
+        for span in spans
+    ]
+    facts = _facts(
+        namespace,
+        pod,
+        flows,
+        spans,
+        span_directness=directness,
+        flow_directness=directness,
+        pod_uid=str(entity.get("pod_uid") or ""),
+    )
+
+    # Stage 3: coverage, limitations and truncation accounting.
+    overall_coverage = _overall_coverage(
+        flows=flows,
+        spans=spans,
+        related_baseline=related_baseline,
+        tempo_coverage=str(tempo_result.get("coverage") or "empty"),
+    )
+    limitations = _flow_limitations(
+        related_baseline=related_baseline,
+        baseline_attempted=baseline_attempted,
+        baseline_error=baseline_error,
+        tempo_error=tempo_error,
+    )
+    source_limit = min(8, max_records) if baseline_attempted else max_records
+    truncation_stages = _truncation_stages(rows, flows, source_limit)
+    tracing_truncated = len(rows) >= source_limit or len(rows) > len(flows)
     return {
         "ok": overall_coverage != "error",
         "status": (
@@ -567,9 +660,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "entity": entity,
         "purpose": purpose,
         "coverage": overall_coverage,
-        "directness": (
-            "related_context" if related_baseline else "direct"
-        ),
+        "directness": directness,
         "query": {
             "sql": sql,
             "filtered_match_count": len(filtered_rows),
@@ -583,7 +674,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             ),
             "time_range": window,
             "pod_ip": pod_ip,
-            "direction": direction,
+            "direction": filters["direction"],
             "tempo_trace_ids": trace_ids,
             "invalid_tempo_trace_id_count": invalid_trace_id_count,
             "tempo": tempo_result.get("query_meta") or {},
