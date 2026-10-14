@@ -123,3 +123,50 @@ class LauncherTests(unittest.TestCase):
         dependencies = dockerfile.index("RUN pip install --no-cache-dir -r requirements.txt")
         self.assertGreater(dockerfile.index("ARG VERSION=1.0.0"), dependencies)
         self.assertGreater(dockerfile.index("ENV VERSION=${VERSION}"), dependencies)
+
+
+class SupervisorRestartTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = start.MCPServerManager("config/example.yaml")
+        self.crashed = Mock()
+        self.crashed.poll.return_value = 1
+        self.crashed.returncode = 1
+        self.fresh = Mock()
+        self.fresh.poll.return_value = None
+        self.starter = Mock(return_value=("svc", self.fresh))
+        self.manager._restart_specs["svc"] = (self.starter, {"name": "svc"})
+        self.manager._started_at["svc"] = 0.0
+        self.manager.processes = [("svc", self.crashed)]
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(self.assertLogs(start.logger, level="INFO"))
+
+    def test_crashed_child_restarts_after_exponential_backoff(self):
+        self.manager._supervise_once(100.0)
+        self.assertEqual(self.manager.processes, [])
+        self.starter.assert_not_called()
+        self.manager._supervise_once(101.0)
+        self.starter.assert_called_once_with({"name": "svc"})
+        self.assertEqual(self.manager.processes, [("svc", self.fresh)])
+        # second crash waits twice as long
+        self.manager.processes = [("svc", self.crashed)]
+        self.manager._supervise_once(102.0)
+        self.manager._supervise_once(103.0)
+        self.assertEqual(self.starter.call_count, 1)
+        self.manager._supervise_once(104.0)
+        self.assertEqual(self.starter.call_count, 2)
+
+    def test_backoff_is_capped_and_reset_after_stable_run(self):
+        self.manager._backoff["svc"] = start.RESTART_BACKOFF_MAX
+        self.manager._supervise_once(0.0)
+        self.assertEqual(self.manager._pending_restart["svc"], start.RESTART_BACKOFF_MAX)
+        self.assertEqual(self.manager._backoff["svc"], start.RESTART_BACKOFF_MAX)
+        self.manager._supervise_once(start.RESTART_BACKOFF_MAX)
+        self.manager._supervise_once(start.RESTART_BACKOFF_MAX + start.STABLE_RUN_SECONDS)
+        self.assertNotIn("svc", self.manager._backoff)
+
+    def test_no_restart_after_stop(self):
+        self.manager._supervise_once(0.0)
+        self.manager.stop_all()
+        self.manager._supervise_once(10.0)
+        self.starter.assert_not_called()

@@ -16,20 +16,29 @@ import os
 import sys
 import subprocess
 import argparse
+import logging
 import signal
 import time
 import threading
 import shutil
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from launch_config import build_proxy_command, build_server_environment
 
 try:
     import yaml
 except ImportError:
-    print("❌ 缺少 pyyaml 依赖，请运行: pip install pyyaml")
-    sys.exit(1)
+    sys.exit("缺少 pyyaml 依赖，请运行: pip install pyyaml")
+
+logger = logging.getLogger("mcp-launcher")
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+# 子进程崩溃后的重启退避：首次 1s，逐次翻倍，上限 60s；稳定运行 60s 后重置。
+RESTART_BACKOFF_INITIAL = 1.0
+RESTART_BACKOFF_MAX = 60.0
+STABLE_RUN_SECONDS = 60.0
+MONITOR_INTERVAL_SECONDS = 1.0
 
 
 class MCPServerManager:
@@ -40,34 +49,40 @@ class MCPServerManager:
         self.processes: List[Tuple[str, subprocess.Popen]] = []  # (name, process)
         self.config: Dict[str, Any] = {}
         self._stop_flag = False
+        # name -> 重启所需的启动函数/配置及退避状态
+        self._restart_specs: Dict[str, Tuple[Callable[[Dict], Any], Dict]] = {}
+        self._backoff: Dict[str, float] = {}
+        self._started_at: Dict[str, float] = {}
+        self._pending_restart: Dict[str, float] = {}  # name -> 计划重启的 monotonic 时间
     
     def _stream_output(self, name: str, process: subprocess.Popen):
-        """读取并打印子进程的输出"""
+        """读取并记录子进程的输出"""
         try:
             for line in iter(process.stdout.readline, ''):
                 if line:
-                    print(f"[{name}] {line.rstrip()}", flush=True)
+                    logger.info("[%s] %s", name, line.rstrip())
                 if process.poll() is not None:
                     break
-        except:
+        except (OSError, ValueError):
+            # 管道在进程退出/终止时关闭
             pass
         
     def load_config(self) -> bool:
         """加载配置文件"""
         if not self.config_path.exists():
-            print(f"❌ 配置文件不存在: {self.config_path}")
+            logger.error("配置文件不存在: %s", self.config_path)
             return False
         
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f) or {}
             return True
-        except Exception as e:
-            print(f"❌ 配置文件解析失败: {e}")
+        except (OSError, yaml.YAMLError) as e:
+            logger.error("配置文件解析失败: %s", e)
             return False
     
     def list_servers(self):
-        """列出所有配置的服务"""
+        """列出所有配置的服务（CLI 报告输出到 stdout）"""
         if not self.load_config():
             return
         
@@ -109,7 +124,7 @@ class MCPServerManager:
         env_vars = server.get('env', {})
         
         if not package or not port:
-            print(f"  ❌ {name}: 缺少 package 或 port 配置")
+            logger.error("%s: 缺少 package 或 port 配置", name)
             return None
         
         # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
@@ -123,24 +138,22 @@ class MCPServerManager:
             # uv 类型: uv --directory <dir> run <package>
             directory = server.get('directory')
             if not directory:
-                print(f"  ❌ {name}: uv 类型必须配置 directory")
+                logger.error("%s: uv 类型必须配置 directory", name)
                 return None
             inner_cmd = f"uv --directory {directory} run {package}"
-            type_icon = "🐍"
         else:
             # npm 类型: npx -y <package>
             inner_cmd = f"npx -y {package}"
-            type_icon = "📦"
         
         # 使用 mcp-proxy (支持更好的连接管理和重连)
         cmd = build_proxy_command(port, inner_cmd, proxy_available=proxy_available)
         
-        print(f"  🚀 {name}: 启动中... [{pkg_type}]")
-        print(f"     {type_icon} 包: {package}")
-        if pkg_type == 'uv':
-            print(f"     📁 目录: {server.get('directory')}")
-        print(f"     🔌 端口: {port}")
-        print(f"     🌐 SSE: http://localhost:{port}/sse")
+        logger.info(
+            "%s: 启动中 [%s] 包=%s%s 端口=%s SSE=http://localhost:%s/sse",
+            name, pkg_type, package,
+            f" 目录={server.get('directory')}" if pkg_type == 'uv' else "",
+            port, port,
+        )
         
         return self._spawn_server(name, cmd, env)
     
@@ -152,7 +165,7 @@ class MCPServerManager:
         env_vars = server.get('env', {})
         
         if not path or not port:
-            print(f"  ❌ {name}: 缺少 path 或 port 配置")
+            logger.error("%s: 缺少 path 或 port 配置", name)
             return None
         
         # 检查文件是否存在
@@ -167,9 +180,10 @@ class MCPServerManager:
             elif config_dir_path.exists():
                 script_path = config_dir_path
             else:
-                print(f"  ❌ {name}: 脚本不存在 - {path}")
-                print(f"     尝试路径: {work_dir_path}")
-                print(f"     尝试路径: {config_dir_path}")
+                logger.error(
+                    "%s: 脚本不存在 - %s (尝试路径: %s, %s)",
+                    name, path, work_dir_path, config_dir_path,
+                )
                 return None
         
         # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
@@ -182,10 +196,10 @@ class MCPServerManager:
             port, f"{sys.executable} {script_path}", proxy_available=proxy_available
         )
         
-        print(f"  🚀 {name}: 启动中...")
-        print(f"     路径: {script_path}")
-        print(f"     端口: {port}")
-        print(f"     SSE: http://localhost:{port}/sse")
+        logger.info(
+            "%s: 启动中 路径=%s 端口=%s SSE=http://localhost:%s/sse",
+            name, script_path, port, port,
+        )
         
         return self._spawn_server(name, cmd, env)
 
@@ -204,119 +218,126 @@ class MCPServerManager:
             # 启动输出读取线程
             threading.Thread(target=self._stream_output, args=(name, process), daemon=True).start()
             return (name, process)
-        except Exception as e:
-            print(f"  ❌ {name}: 启动失败 - {e}")
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            logger.error("%s: 启动失败 - %s", name, e)
             return None
 
     def start_all(self):
         """启动所有已启用的服务"""
         if not self.load_config():
             return
-        
-        print("\n🔧 MCP Server 统一启动器")
-        print("=" * 60)
-        
+
+        logger.info("MCP Server 统一启动器")
         started_count = 0
-        
-        # 启动第三方包 (npm / uv)
         customer_servers = self.config.get('customermcp', []) or []
-        if customer_servers:
-            print("\n📦 启动第三方 MCP Server...")
-            for server in customer_servers:
-                if not server.get('enabled', True):
-                    print(f"  ⏭️  {server.get('name', 'unnamed')}: 已跳过 (disabled)")
-                    continue
-                process = self.start_package_server(server)
-                if process:
-                    self.processes.append(process)
-                    started_count += 1
-        
-        # 启动本地自定义
         basic_servers = self.config.get('basicmcp', []) or []
-        if basic_servers:
-            print("\n🏠 启动本地 MCP Server...")
-            for server in basic_servers:
+        groups = (
+            ("第三方 MCP Server", customer_servers, self.start_package_server),
+            ("本地 MCP Server", basic_servers, self.start_local_server),
+        )
+        for label, servers, starter in groups:
+            if servers:
+                logger.info("启动%s...", label)
+            for server in servers:
                 if not server.get('enabled', True):
-                    print(f"  ⏭️  {server.get('name', 'unnamed')}: 已跳过 (disabled)")
+                    logger.info("%s: 已跳过 (disabled)", server.get('name', 'unnamed'))
                     continue
-                process = self.start_local_server(server)
+                process = starter(server)
                 if process:
                     self.processes.append(process)
+                    self._restart_specs[process[0]] = (starter, server)
+                    self._started_at[process[0]] = time.monotonic()
                     started_count += 1
-        
-        print("\n" + "=" * 60)
-        
+
         if started_count == 0:
-            print("⚠️  没有服务被启动，请检查配置文件")
+            logger.warning("没有服务被启动，请检查配置文件")
             return
-        
-        print(f"✅ 已启动 {started_count} 个 MCP Server")
-        print("\n📡 SSE 端点汇总:")
-        
-        # 打印所有端点
+
+        logger.info("已启动 %d 个 MCP Server", started_count)
         for server in customer_servers + basic_servers:
             if server.get('enabled', True):
-                port = server.get('port')
-                name = server.get('name', 'unnamed')
-                print(f"   - {name}: http://localhost:{port}/sse")
-        
-        print("\n按 Ctrl+C 停止所有服务...\n")
-        
+                logger.info(
+                    "SSE 端点: %s -> http://localhost:%s/sse",
+                    server.get('name', 'unnamed'), server.get('port'),
+                )
+        logger.info("按 Ctrl+C 停止所有服务")
+
         # 等待并处理信号
         self._wait_for_exit()
-    
+
     def _wait_for_exit(self):
-        """等待退出信号"""
+        """等待退出信号，并监控/重启子进程"""
         def signal_handler(sig, frame):
             self._stop_flag = True
-            print("\n\n🛑 正在停止所有服务...")
+            logger.info("正在停止所有服务...")
             self.stop_all()
             sys.exit(0)
-        
+
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         # 给服务一点启动时间
         time.sleep(2)
-        
+
         # 检查服务是否正常启动
-        print("🔍 检查服务状态...")
         all_running = True
         for name, process in self.processes:
             if process.poll() is None:
-                print(f"   ✅ {name}: 运行中")
+                logger.info("%s: 运行中", name)
             else:
-                print(f"   ❌ {name}: 启动失败 (退出码: {process.returncode})")
+                logger.error("%s: 启动失败 (退出码: %s)", name, process.returncode)
                 all_running = False
-        
         if not all_running:
-            print("\n⚠️  部分服务启动失败，请检查配置")
-        
-        print("\n" + "=" * 60)
-        print("🟢 服务运行中，按 Ctrl+C 停止...\n")
-        
-        # 保持运行并监控进程
+            logger.warning("部分服务启动失败，将按退避策略自动重启")
+        logger.info("服务运行中，按 Ctrl+C 停止")
+
         while not self._stop_flag:
-            time.sleep(5)
-            # 检查是否有进程意外退出
-            for name, process in self.processes:
-                if process.poll() is not None:
-                    # 只在进程确实退出时报告一次
-                    exit_code = process.returncode
-                    if exit_code != 0:
-                        print(f"⚠️  {name}: 进程已退出 (退出码: {exit_code})")
-                    # 从列表中移除已退出的进程避免重复报告
-                    self.processes = [(n, p) for n, p in self.processes if p.poll() is None]
-    
+            time.sleep(MONITOR_INTERVAL_SECONDS)
+            self._supervise_once(time.monotonic())
+
+    def _supervise_once(self, now: float):
+        """一次监控：重置稳定进程的退避、安排已退出进程的重启、执行到期重启。"""
+        alive = []
+        for name, process in self.processes:
+            if process.poll() is None:
+                if now - self._started_at.get(name, now) >= STABLE_RUN_SECONDS:
+                    self._backoff.pop(name, None)
+                alive.append((name, process))
+            elif name in self._restart_specs:
+                self._schedule_restart(name, now, f"进程已退出 (退出码: {process.returncode})")
+            else:
+                logger.warning("%s: 进程已退出 (退出码: %s)", name, process.returncode)
+        self.processes = alive
+
+        for name, due in list(self._pending_restart.items()):
+            if self._stop_flag or due > now:
+                continue
+            del self._pending_restart[name]
+            starter, server = self._restart_specs[name]
+            logger.info("%s: 重启中", name)
+            result = starter(server)
+            if result:
+                self.processes.append(result)
+                self._started_at[name] = now
+            else:
+                self._schedule_restart(name, now, "重启失败")
+
+    def _schedule_restart(self, name: str, now: float, reason: str):
+        delay = self._backoff.get(name, RESTART_BACKOFF_INITIAL)
+        self._backoff[name] = min(delay * 2, RESTART_BACKOFF_MAX)
+        self._pending_restart[name] = now + delay
+        logger.warning("%s: %s，%.0f 秒后重启", name, reason, delay)
+
     def stop_all(self):
         """停止所有服务"""
+        self._pending_restart.clear()
         for name, process in self.processes:
             try:
                 process.terminate()
                 process.wait(timeout=5)
-            except:
+            except (subprocess.TimeoutExpired, OSError):
                 process.kill()
-        print("✅ 所有服务已停止")
+        logger.info("所有服务已停止")
 
 
 def main():
@@ -342,7 +363,8 @@ def main():
     )
     
     args = parser.parse_args()
-    
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=LOG_FORMAT)
+
     # 确定配置文件路径
     config_path = args.config
     if not Path(config_path).is_absolute():

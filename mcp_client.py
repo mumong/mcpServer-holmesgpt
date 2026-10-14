@@ -79,7 +79,8 @@ class MCPClient:
                         msg = json.loads(data)
                         if "id" in msg:
                             self.responses[msg["id"]] = msg
-        except:
+        except (requests.RequestException, ValueError):
+            # 连接断开或收到非法 JSON 时结束监听
             pass
     
     def _send(self, method: str, params: dict = None, wait: bool = True, timeout: int = 10):
@@ -120,7 +121,7 @@ class MCPClient:
                 text = content[0].get("text", "")
                 try:
                     return json.loads(text)
-                except:
+                except ValueError:
                     return text
             return content
         if resp and "error" in resp:
