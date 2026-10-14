@@ -14,7 +14,8 @@ from typing import Any
 from .. import schemas
 from ..collectors.kubernetes import get_pod
 from ..config import get_config
-from ..schemas import parse_time_window
+from ..schemas import parse_datetime, parse_time_window
+from .fact_ledger import _TOPOLOGY_SOURCE_SYSTEMS
 
 
 # Tool inputs and backend queries remain bounded for safety, but successful
@@ -23,7 +24,6 @@ from ..schemas import parse_time_window
 MAX_INPUT_BYTES = 4096
 MAX_QUERY_METADATA_BYTES = 4096
 MAX_WINDOW_SECONDS = 2 * 60 * 60
-_TOPOLOGY_SOURCE_SYSTEMS = {"kubernetes", "deepflow"}
 
 
 @dataclass(frozen=True)
@@ -138,10 +138,10 @@ def bounded_window(
         return None, error
 
     try:
-        start = _parse_datetime(normalized.effective["start"])
-        end = _parse_datetime(normalized.effective["end"])
+        start = parse_datetime(normalized.effective["start"])
+        end = parse_datetime(normalized.effective["end"])
         if not_before:
-            lifecycle_start = _parse_datetime(not_before)
+            lifecycle_start = parse_datetime(not_before)
             if start < lifecycle_start:
                 start = lifecycle_start
     except (KeyError, TypeError, ValueError) as exc:
@@ -228,8 +228,8 @@ def normalize_time_window(
             end=end_text or None,
             window_minutes=window_minutes,
         )
-        start = _parse_datetime(window.start)
-        end = _parse_datetime(window.end)
+        start = parse_datetime(window.start)
+        end = parse_datetime(window.end)
     except (TypeError, ValueError, OverflowError) as exc:
         return None, {"code": "invalid_time_range", "message": str(exc)}
 
@@ -609,15 +609,6 @@ def _bounded_text(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 14)] + "...[truncated]"
-
-
-def _parse_datetime(value: str) -> datetime:
-    text = str(value or "").strip()
-    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
-    parsed = datetime.fromisoformat(normalized)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _format_datetime(value: datetime) -> str:

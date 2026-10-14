@@ -23,17 +23,20 @@ def parse_time_window(
     end: str | None = None,
     window_minutes: int | None = None,
 ) -> "TimeWindow":
-    end_dt = _parse_datetime(end) if end else utc_now()
+    end_dt = parse_datetime(end) if end else utc_now()
     minutes = max(1, int(window_minutes or 30))
-    start_dt = _parse_datetime(start) if start else end_dt - timedelta(minutes=minutes)
+    start_dt = parse_datetime(start) if start else end_dt - timedelta(minutes=minutes)
     return TimeWindow(start=isoformat(start_dt) or "", end=isoformat(end_dt) or "", timezone="UTC")
 
 
-def _parse_datetime(value: str) -> datetime:
-    normalized = value.strip()
-    if normalized.endswith("Z"):
-        normalized = normalized[:-1] + "+00:00"
-    return datetime.fromisoformat(normalized).astimezone(timezone.utc)
+def parse_datetime(value: str) -> datetime:
+    """Parse ISO-8601 (``Z`` accepted) to aware UTC; naive values are UTC."""
+    text = str(value or "").strip()
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass
