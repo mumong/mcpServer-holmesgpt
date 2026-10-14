@@ -1,0 +1,9 @@
+# Project metadata only. The service is shipped via the Dockerfile
+# (python:3.11-slim) and is not installed as a package; runtime dependencies
+# stay pinned in requirements.txt. 3.10 is the supported floor (PEP 604 unions
+# at runtime) and is what local development/test venvs use.
+# scripts/test_unit.py enforces requires-python.
+[project]
+name = "mcp-server-manager"
+requires-python = ">=3.10"
+dynamic = ["version", "dependencies"]

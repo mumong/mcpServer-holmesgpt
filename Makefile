@@ -8,7 +8,8 @@ NAMESPACE := mcp
 
 VERSION ?= $(shell cat VERSION)
 DOCKER_TAG := $(VERSION)
-PYTHON ?= python3
+# 优先使用项目虚拟环境；版本下限见 pyproject.toml requires-python
+PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
 .PHONY: build push build-push deploy delete restart reload logs status sync-version run run-local list test test-unit check check-syntax help
 

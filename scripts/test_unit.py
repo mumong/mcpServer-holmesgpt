@@ -7,6 +7,7 @@ This is a regression guard, not an operating-system security sandbox.
 
 import os
 from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -36,7 +37,16 @@ def guard_external_calls(event, args):
         raise RuntimeError("Offline tests blocked external child process")
 
 
+def check_python_version():
+    """Fail fast when the interpreter is older than pyproject's requires-python."""
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^requires-python\s*=\s*">=(\d+)\.(\d+)"', text, re.MULTILINE)
+    if match and sys.version_info[:2] < (int(match[1]), int(match[2])):
+        sys.exit(f"Python >={match[1]}.{match[2]} required (pyproject.toml), got {sys.version.split()[0]}")
+
+
 def main():
+    check_python_version()
     sys.dont_write_bytecode = True
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.chdir(ROOT)
