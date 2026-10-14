@@ -180,338 +180,182 @@ def build_query_body(
     }
 
 
-def execute(arguments: dict[str, Any]) -> dict[str, Any]:
-    namespace = str(arguments.get("namespace") or "").strip()
-    pod = str(arguments.get("pod") or "").strip()
-    purpose = str(arguments.get("purpose") or "").strip()
-    keywords = [
-        str(value).strip()
-        for value in arguments.get("keywords") or []
-        if str(value).strip()
-    ]
-    levels = [
-        str(value).strip()
-        for value in arguments.get("levels") or []
-        if str(value).strip()
-    ]
+def _error(
+    namespace: str,
+    pod: str,
+    purpose: str,
+    code: str,
+    message: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    return error_result(
+        source_system="elasticsearch",
+        dimension="logging",
+        namespace=namespace,
+        pod=pod,
+        purpose=purpose,
+        code=code,
+        message=message,
+        **extra,
+    )
+
+
+def _clean_strings(values: Any) -> list[str]:
+    return [str(value).strip() for value in values or [] if str(value).strip()]
+
+
+def _parse_filters(
+    arguments: dict[str, Any],
+) -> tuple[tuple[list[str], list[str], str, list[str]] | None, tuple[str, str] | None]:
+    """Validate keyword/level/field filters; returns (filters, (code, message))."""
+    keywords = _clean_strings(arguments.get("keywords"))
+    levels = _clean_strings(arguments.get("levels"))
     if len(keywords) > MAX_KEYWORDS:
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="too_many_keywords",
-            message=f"keywords must contain at most {MAX_KEYWORDS} items",
-        )
+        return None, ("too_many_keywords", f"keywords must contain at most {MAX_KEYWORDS} items")
     if len(levels) > MAX_LEVELS:
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="too_many_levels",
-            message=f"levels must contain at most {MAX_LEVELS} items",
-        )
+        return None, ("too_many_levels", f"levels must contain at most {MAX_LEVELS} items")
     if any(len(value) > 120 for value in keywords):
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="keyword_too_long",
-            message="each keyword must be at most 120 characters",
-        )
+        return None, ("keyword_too_long", "each keyword must be at most 120 characters")
     keyword_mode = str(arguments.get("keyword_mode") or "any").strip().lower()
     if keyword_mode not in {"any", "all", "phrase"}:
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_keyword_mode",
-            message="keyword_mode must be any, all or phrase",
-        )
+        return None, ("invalid_keyword_mode", "keyword_mode must be any, all or phrase")
     if keyword_mode == "phrase" and keywords:
         keywords = [" ".join(keywords)]
         keyword_mode = "all"
 
-    requested_fields = [
-        str(value).strip()
-        for value in arguments.get("fields") or []
-        if str(value).strip()
-    ]
+    requested_fields = _clean_strings(arguments.get("fields"))
     invalid_fields = [
         field
         for field in requested_fields
         if len(field) > 128 or not SAFE_SOURCE_FIELD_RE.fullmatch(field)
     ]
     if invalid_fields:
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="invalid_fields",
-            message=(
-                "fields contains unsupported values: "
-                + ", ".join(invalid_fields[:4])
-            ),
+        return None, (
+            "invalid_fields",
+            "fields contains unsupported values: " + ", ".join(invalid_fields[:4]),
         )
+    return (keywords, levels, keyword_mode, requested_fields), None
 
-    max_records = min(MAX_RECORDS, max(1, int(arguments.get("max_records") or 20)))
-    entity, entity_error = resolve_pod_scope(
-        namespace,
-        pod,
-        arguments.get("pod_uid"),
-    )
-    if entity_error:
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=entity_error["code"],
-            message=entity_error["message"],
-        )
-    assert entity is not None
-    container = str(arguments.get("container") or "").strip() or None
-    if container and container not in entity.get("containers", []):
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="container_not_found",
-            message=f"container {container} is not present in the target Pod",
-            entity=entity,
-        )
-    window, window_error = bounded_window(
-        arguments,
-        not_before=entity.get("creation_timestamp"),
-    )
-    if window_error:
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=window_error["code"],
-            message=window_error["message"],
-            entity=entity,
-        )
-    assert window is not None
 
-    common = {
-        "namespace": namespace,
-        "pod": pod,
-        "pod_uid": entity.get("pod_uid"),
-        "start": window["start"],
-        "end": window["end"],
-        "container": container,
-        "keywords": keywords,
-        "keyword_mode": keyword_mode,
-        "levels": levels,
-        "trace_id": str(arguments.get("trace_id") or "").strip() or None,
-        "max_records": max_records,
-        "fields": requested_fields or None,
+def _backend_error_query(
+    identity_basis: str,
+    window: dict[str, Any],
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "index": get_config().elasticsearch_index,
+        "identity_basis": identity_basis,
+        "time_range": window,
+        "dsl": body,
+        "executions": [
+            {
+                "identity_basis": identity_basis,
+                "dsl_ref": "query.dsl",
+                "status": "error",
+                "error_ref": "error.message",
+            }
+        ],
     }
-    identity_basis = "pod_uid" if entity.get("pod_uid") else "name_time_fallback"
+
+
+def _run_name_fallback(
+    fail: Any,
+    common: dict[str, Any],
+    window: dict[str, Any],
+    uid_body: dict[str, Any],
+    uid_hits: list[dict[str, Any]],
+) -> tuple[tuple[dict[str, Any], dict[str, Any], str, list[dict[str, Any]]] | None, dict[str, Any] | None]:
+    """Re-query by Pod name/time after an empty UID query.
+
+    Returns ((payload, body, identity_basis, executions), None) or (None, error).
+    """
+    query_executions = [
+        {
+            "identity_basis": "pod_uid",
+            "query": query_descriptor(uid_body, executed=True),
+            "hit_count": len(uid_hits),
+        }
+    ]
+    identity_basis = "name_time_fallback"
     body = build_query_body(
         **common,
         identity_basis=identity_basis,
     )
-    if query_metadata_exceeds_budget(body):
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="query_metadata_too_large",
-            message=(
-                "generated Elasticsearch DSL exceeds the "
+    planned_query_meta = {
+        "index": get_config().elasticsearch_index,
+        "identity_basis": identity_basis,
+        "uid_query_hits": len(uid_hits),
+        "time_range": window,
+        "dsl": body,
+        "executions": [
+            *query_executions,
+            {
+                "identity_basis": identity_basis,
+                "dsl_ref": "query.dsl",
+            },
+        ],
+    }
+    if query_metadata_exceeds_budget(planned_query_meta):
+        return None, fail(
+            "query_metadata_too_large",
+            (
+                "generated Elasticsearch fallback query chain exceeds the "
                 f"{MAX_QUERY_METADATA_BYTES}-byte metadata budget"
             ),
-            entity=entity,
-            query=query_descriptor(body, executed=False),
+            query={
+                "index": get_config().elasticsearch_index,
+                "identity_basis": "pod_uid",
+                "uid_query_hits": len(uid_hits),
+                "time_range": window,
+                "dsl": uid_body,
+                "executions": [
+                    {
+                        "identity_basis": "pod_uid",
+                        "dsl_ref": "query.dsl",
+                        "hit_count": len(uid_hits),
+                    }
+                ],
+                "rejected_next_query": query_descriptor(
+                    body,
+                    executed=False,
+                ),
+            },
         )
     payload = _query_elasticsearch(body)
     if payload.get("error"):
         backend_error = str(payload.get("error"))
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="elasticsearch_error",
-            message=backend_error,
-            entity=entity,
+        return None, fail(
+            "elasticsearch_error",
+            backend_error,
             query={
-                "index": get_config().elasticsearch_index,
-                "identity_basis": identity_basis,
-                "time_range": window,
-                "dsl": body,
+                **planned_query_meta,
                 "executions": [
+                    *query_executions,
                     {
                         "identity_basis": identity_basis,
                         "dsl_ref": "query.dsl",
                         "status": "error",
                         "error_ref": "error.message",
-                    }
+                    },
                 ],
             },
         )
-
-    uid_hits = _hits(payload)
-    query_executions = [
+    query_executions.append(
         {
             "identity_basis": identity_basis,
             "dsl_ref": "query.dsl",
-            "hit_count": len(uid_hits),
+            "hit_count": len(_hits(payload)),
         }
-    ]
-    allow_fallback = bool(arguments.get("allow_name_fallback", True))
-    if (
-        not uid_hits
-        and identity_basis == "pod_uid"
-        and allow_fallback
-    ):
-        uid_body = body
-        query_executions = [
-            {
-                "identity_basis": "pod_uid",
-                "query": query_descriptor(uid_body, executed=True),
-                "hit_count": len(uid_hits),
-            }
-        ]
-        identity_basis = "name_time_fallback"
-        body = build_query_body(
-            **common,
-            identity_basis=identity_basis,
-        )
-        planned_query_meta = {
-            "index": get_config().elasticsearch_index,
-            "identity_basis": identity_basis,
-            "uid_query_hits": len(uid_hits),
-            "time_range": window,
-            "dsl": body,
-            "executions": [
-                *query_executions,
-                {
-                    "identity_basis": identity_basis,
-                    "dsl_ref": "query.dsl",
-                },
-            ],
-        }
-        if query_metadata_exceeds_budget(planned_query_meta):
-            return error_result(
-                source_system="elasticsearch",
-                dimension="logging",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code="query_metadata_too_large",
-                message=(
-                    "generated Elasticsearch fallback query chain exceeds the "
-                    f"{MAX_QUERY_METADATA_BYTES}-byte metadata budget"
-                ),
-                entity=entity,
-                query={
-                    "index": get_config().elasticsearch_index,
-                    "identity_basis": "pod_uid",
-                    "uid_query_hits": len(uid_hits),
-                    "time_range": window,
-                    "dsl": uid_body,
-                    "executions": [
-                        {
-                            "identity_basis": "pod_uid",
-                            "dsl_ref": "query.dsl",
-                            "hit_count": len(uid_hits),
-                        }
-                    ],
-                    "rejected_next_query": query_descriptor(
-                        body,
-                        executed=False,
-                    ),
-                },
-            )
-        payload = _query_elasticsearch(body)
-        if payload.get("error"):
-            backend_error = str(payload.get("error"))
-            return error_result(
-                source_system="elasticsearch",
-                dimension="logging",
-                namespace=namespace,
-                pod=pod,
-                purpose=purpose,
-                code="elasticsearch_error",
-                message=backend_error,
-                entity=entity,
-                query={
-                    **planned_query_meta,
-                    "executions": [
-                        *query_executions,
-                        {
-                            "identity_basis": identity_basis,
-                            "dsl_ref": "query.dsl",
-                            "status": "error",
-                            "error_ref": "error.message",
-                        },
-                    ],
-                },
-            )
-        query_executions.append(
-            {
-                "identity_basis": identity_basis,
-                "dsl_ref": "query.dsl",
-                "hit_count": len(_hits(payload)),
-            }
-        )
-
-    current_entity, lifecycle_error = resolve_pod_scope(
-        namespace,
-        pod,
-        entity.get("pod_uid"),
     )
-    if lifecycle_error or _entity_lifecycle_changed(entity, current_entity):
-        changed_entity = {**entity, "lifecycle_changed": True}
-        return error_result(
-            source_system="elasticsearch",
-            dimension="logging",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="pod_lifecycle_changed",
-            message=str(
-                (lifecycle_error or {}).get("message")
-                or "Pod identity changed while Elasticsearch query was running"
-            ),
-            entity=changed_entity,
-            query={
-                "index": get_config().elasticsearch_index,
-                "identity_basis": identity_basis,
-                "time_range": window,
-                "executions": query_executions,
-            },
-        )
+    return (payload, body, identity_basis, query_executions), None
 
-    normalized_records = _dedupe_records(
-        _hits(payload),
-        requested_fields=requested_fields,
-        current_pod_uid=str(entity.get("pod_uid") or ""),
-        identity_basis=identity_basis,
-    )
-    records = normalized_records[:max_records]
-    samples = records
+
+def _log_facts(
+    samples: list[dict[str, Any]],
+    namespace: str,
+    pod: str,
+) -> list[dict[str, Any]]:
+    """Attach a stable ref to each sample and project it into a log fact."""
     facts: list[dict[str, Any]] = []
     for sample in samples:
         ref = evidence_ref("log", namespace, pod, sample)
@@ -540,6 +384,187 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
                 "directness": sample.get("directness") or "related_context",
             }
         )
+    return facts
+
+
+def _truncation_stages(
+    backend_total: dict[str, Any],
+    backend_matched: int,
+    backend_retrieved: int,
+    normalized_count: int,
+    returned_count: int,
+) -> list[dict[str, Any]]:
+    stages = []
+    if (
+        str(backend_total.get("relation") or "eq") != "eq"
+        or backend_matched > backend_retrieved
+    ):
+        stages.append(
+            {
+                "stage": "backend",
+                "reason": "max_hits",
+                "before": backend_matched,
+                "after": backend_retrieved,
+            }
+        )
+    if normalized_count > returned_count:
+        stages.append(
+            {
+                "stage": "tool_query",
+                "reason": "max_records",
+                "before": normalized_count,
+                "after": returned_count,
+            }
+        )
+    return stages
+
+
+def _records_directness(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return "direct"
+    if all(item.get("directness") == "direct" for item in records):
+        return "direct"
+    return "related_context"
+
+
+def execute(arguments: dict[str, Any]) -> dict[str, Any]:
+    namespace = str(arguments.get("namespace") or "").strip()
+    pod = str(arguments.get("pod") or "").strip()
+    purpose = str(arguments.get("purpose") or "").strip()
+
+    def fail(code: str, message: str, **extra: Any) -> dict[str, Any]:
+        return _error(namespace, pod, purpose, code, message, **extra)
+
+    filters, filter_error = _parse_filters(arguments)
+    if filter_error:
+        return fail(*filter_error)
+    assert filters is not None
+    keywords, levels, keyword_mode, requested_fields = filters
+
+    # Stage: resolve the Pod scope, container and bounded time window.
+    max_records = min(MAX_RECORDS, max(1, int(arguments.get("max_records") or 20)))
+    entity, entity_error = resolve_pod_scope(
+        namespace,
+        pod,
+        arguments.get("pod_uid"),
+    )
+    if entity_error:
+        return fail(entity_error["code"], entity_error["message"])
+    assert entity is not None
+    container = str(arguments.get("container") or "").strip() or None
+    if container and container not in entity.get("containers", []):
+        return fail(
+            "container_not_found",
+            f"container {container} is not present in the target Pod",
+            entity=entity,
+        )
+    window, window_error = bounded_window(
+        arguments,
+        not_before=entity.get("creation_timestamp"),
+    )
+    if window_error:
+        return fail(window_error["code"], window_error["message"], entity=entity)
+    assert window is not None
+
+    # Stage: build and run the UID query, falling back to name/time if empty.
+    common = {
+        "namespace": namespace,
+        "pod": pod,
+        "pod_uid": entity.get("pod_uid"),
+        "start": window["start"],
+        "end": window["end"],
+        "container": container,
+        "keywords": keywords,
+        "keyword_mode": keyword_mode,
+        "levels": levels,
+        "trace_id": str(arguments.get("trace_id") or "").strip() or None,
+        "max_records": max_records,
+        "fields": requested_fields or None,
+    }
+    identity_basis = "pod_uid" if entity.get("pod_uid") else "name_time_fallback"
+    body = build_query_body(
+        **common,
+        identity_basis=identity_basis,
+    )
+    if query_metadata_exceeds_budget(body):
+        return fail(
+            "query_metadata_too_large",
+            (
+                "generated Elasticsearch DSL exceeds the "
+                f"{MAX_QUERY_METADATA_BYTES}-byte metadata budget"
+            ),
+            entity=entity,
+            query=query_descriptor(body, executed=False),
+        )
+    payload = _query_elasticsearch(body)
+    if payload.get("error"):
+        backend_error = str(payload.get("error"))
+        return fail(
+            "elasticsearch_error",
+            backend_error,
+            entity=entity,
+            query=_backend_error_query(identity_basis, window, body),
+        )
+
+    uid_hits = _hits(payload)
+    query_executions = [
+        {
+            "identity_basis": identity_basis,
+            "dsl_ref": "query.dsl",
+            "hit_count": len(uid_hits),
+        }
+    ]
+    allow_fallback = bool(arguments.get("allow_name_fallback", True))
+    if (
+        not uid_hits
+        and identity_basis == "pod_uid"
+        and allow_fallback
+    ):
+        fallback, fallback_error = _run_name_fallback(
+            lambda code, message, **extra: fail(code, message, entity=entity, **extra),
+            common,
+            window,
+            body,
+            uid_hits,
+        )
+        if fallback_error:
+            return fallback_error
+        assert fallback is not None
+        payload, body, identity_basis, query_executions = fallback
+
+    # Stage: reject results if the Pod identity changed during the query.
+    current_entity, lifecycle_error = resolve_pod_scope(
+        namespace,
+        pod,
+        entity.get("pod_uid"),
+    )
+    if lifecycle_error or _entity_lifecycle_changed(entity, current_entity):
+        changed_entity = {**entity, "lifecycle_changed": True}
+        return fail(
+            "pod_lifecycle_changed",
+            str(
+                (lifecycle_error or {}).get("message")
+                or "Pod identity changed while Elasticsearch query was running"
+            ),
+            entity=changed_entity,
+            query={
+                "index": get_config().elasticsearch_index,
+                "identity_basis": identity_basis,
+                "time_range": window,
+                "executions": query_executions,
+            },
+        )
+
+    # Stage: normalize records, derive facts and assemble the result.
+    normalized_records = _dedupe_records(
+        _hits(payload),
+        requested_fields=requested_fields,
+        current_pod_uid=str(entity.get("pod_uid") or ""),
+        identity_basis=identity_basis,
+    )
+    records = normalized_records[:max_records]
+    samples = records
+    facts = _log_facts(samples, namespace, pod)
     query_meta = {
         "index": get_config().elasticsearch_index,
         "identity_basis": identity_basis,
@@ -561,28 +586,13 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     backend_matched = int(backend_total.get("value") or 0)
     backend_retrieved = len(_hits(payload))
     truncated = _backend_truncated(payload, len(records))
-    truncation_stages = []
-    if (
-        str(backend_total.get("relation") or "eq") != "eq"
-        or backend_matched > backend_retrieved
-    ):
-        truncation_stages.append(
-            {
-                "stage": "backend",
-                "reason": "max_hits",
-                "before": backend_matched,
-                "after": backend_retrieved,
-            }
-        )
-    if len(normalized_records) > len(records):
-        truncation_stages.append(
-            {
-                "stage": "tool_query",
-                "reason": "max_records",
-                "before": len(normalized_records),
-                "after": len(records),
-            }
-        )
+    truncation_stages = _truncation_stages(
+        backend_total,
+        backend_matched,
+        backend_retrieved,
+        len(normalized_records),
+        len(records),
+    )
     return {
         "ok": True,
         "status": "query_succeeded",
@@ -591,14 +601,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "entity": entity,
         "purpose": purpose,
         "coverage": "present" if records else "empty",
-        "directness": (
-            "direct"
-            if records
-            and all(item.get("directness") == "direct" for item in records)
-            else "related_context"
-            if records
-            else "direct"
-        ),
+        "directness": _records_directness(records),
         "query": query_meta,
         "facts": facts,
         "samples": samples,
