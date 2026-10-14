@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import sys
-import time
 import traceback
 from typing import Any, Dict, Optional, Union
 
@@ -218,9 +217,7 @@ def log_tool_call(
         })
     elif logger.isEnabledFor(logging.INFO):
         # INFO：参数摘要
-        logger.info(
-            f"[TOOL_CALL] {tool_name} | args=({_args_summary(arguments)})"
-        )
+        logger.info("[TOOL_CALL] %s | args=(%s)", tool_name, _args_summary(arguments))
 
 
 # ---------------------------------------------------------------------------
@@ -268,10 +265,11 @@ def log_tool_result(
             "error_msg": str(error),
         })
         # 附带堆栈（仅 DEBUG 可见完整 traceback，ERROR 级别记录摘要即可）
-        logger.debug(
-            f"[TOOL_RESULT] {tool_name} | traceback:\n"
-            f"{traceback.format_exception(type(error), error, error.__traceback__)}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[TOOL_RESULT] %s | traceback:\n%s",
+                tool_name, traceback.format_exception(type(error), error, error.__traceback__),
+            )
         return
 
     status = "ok"
@@ -298,15 +296,15 @@ def log_tool_result(
     elif logger.isEnabledFor(logging.INFO):
         # INFO：摘要
         logger.info(
-            f"[TOOL_RESULT] {tool_name} | {status.upper()} | "
-            f"{elapsed_ms:.0f}ms | {result_len} chars"
+            "[TOOL_RESULT] %s | %s | %.0fms | %d chars",
+            tool_name, status.upper(), elapsed_ms, result_len,
         )
 
     # WARNING：结果中检测到错误标记时额外告警
     if status == "warn" and logger.isEnabledFor(logging.WARNING):
         logger.warning(
-            f"[TOOL_RESULT] {tool_name} | 结果包含错误标记 | "
-            f"preview={_truncate(result_str, 300)}"
+            "[TOOL_RESULT] %s | 结果包含错误标记 | preview=%s",
+            tool_name, _truncate(result_str, 300),
         )
 
 
@@ -366,15 +364,15 @@ def log_http_request(
     elif logger.isEnabledFor(logging.INFO):
         # INFO：摘要
         logger.info(
-            f"[HTTP] {method} {url} | {status_str} | "
-            f"{elapsed_ms:.0f}ms | resp={resp_len} chars"
+            "[HTTP] %s %s | %s | %.0fms | resp=%d chars",
+            method, url, status_str, elapsed_ms, resp_len,
         )
 
     # WARNING：HTTP 错误状态码
     if status_code and status_code >= 400:
         logger.warning(
-            f"[HTTP] {method} {url} | HTTP {status_code} | "
-            f"{elapsed_ms:.0f}ms | resp_preview={_truncate(response_text or '', 500)}"
+            "[HTTP] %s %s | HTTP %s | %.0fms | resp_preview=%s",
+            method, url, status_code, elapsed_ms, _truncate(response_text or '', 500),
         )
 
 
@@ -444,51 +442,13 @@ def log_command(
     elif logger.isEnabledFor(logging.INFO):
         # INFO：摘要
         logger.info(
-            f"[CMD] exit={returncode} | {elapsed_ms:.0f}ms | "
-            f"stdout={stdout_len} chars, stderr={stderr_len} chars | "
-            f"cmd={_truncate(cmd, 120)}"
+            "[CMD] exit=%s | %.0fms | stdout=%d chars, stderr=%d chars | cmd=%s",
+            returncode, elapsed_ms, stdout_len, stderr_len, _truncate(cmd, 120),
         )
 
     # WARNING：非零退出码
     if returncode and returncode != 0:
         logger.warning(
-            f"[CMD] 非零退出码 exit={returncode} | {elapsed_ms:.0f}ms | "
-            f"cmd={_truncate(cmd, 200)} | "
-            f"stderr_preview={_truncate(stderr or '', 500)}"
+            "[CMD] 非零退出码 exit=%s | %.0fms | cmd=%s | stderr_preview=%s",
+            returncode, elapsed_ms, _truncate(cmd, 200), _truncate(stderr or '', 500),
         )
-
-
-# ---------------------------------------------------------------------------
-# 便捷装饰器：自动记录工具调用 + 结果
-# ---------------------------------------------------------------------------
-
-def tool_logged(server_name: str):
-    """
-    装饰器工厂：自动为工具函数添加调用/结果日志。
-
-    用法：
-        @tool_logged("kubernetes")
-        def call_tool(name: str, arguments: dict) -> Optional[str]:
-            ...
-
-    装饰后，每次调用会自动记录 log_tool_call 和 log_tool_result。
-    """
-    def decorator(func):
-        def wrapper(name: str, arguments: dict, *args, **kwargs):
-            log_tool_call(server_name, name, arguments)
-            t0 = time.monotonic()
-            try:
-                result = func(name, arguments, *args, **kwargs)
-                elapsed = time.monotonic() - t0
-                log_tool_result(server_name, name, result, elapsed)
-                return result
-            except Exception as e:
-                elapsed = time.monotonic() - t0
-                log_tool_result(server_name, name, None, elapsed, error=e)
-                raise
-        # 保留原函数元信息
-        wrapper.__name__ = func.__name__
-        wrapper.__doc__ = func.__doc__
-        wrapper.__module__ = func.__module__
-        return wrapper
-    return decorator

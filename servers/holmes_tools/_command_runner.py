@@ -57,10 +57,10 @@ def run_command(
     try:
         cmd = _render(command_tpl, arguments)
     except Exception as e:
-        logger.error(f"[run_command] 模板渲染失败: tpl={command_tpl!r}, args={arguments}, error={e}")
+        logger.error("[run_command] 模板渲染失败: tpl=%r, args=%s, error=%s", command_tpl, arguments, e)
         return f"Template error: {e}"
     cmd = os.path.expandvars(cmd)
-    logger.info(f"[run_command] 执行命令: {cmd}")
+    logger.info("[run_command] 执行命令: %s", cmd)
     t0 = time.monotonic()
     try:
         result = subprocess.run(
@@ -76,22 +76,19 @@ def run_command(
         out = stdout + stderr
         if result.returncode != 0:
             logger.warning(
-                f"[run_command] ❌ 命令失败 (exit {result.returncode}, {elapsed:.2f}s): {cmd}\n"
-                f"  stdout({len(stdout)}): {stdout[:300]}\n"
-                f"  stderr({len(stderr)}): {stderr[:300]}"
+                "[run_command] 命令失败 (exit %s, %.2fs): %s\n  stdout(%d): %s\n  stderr(%d): %s",
+                result.returncode, elapsed, cmd, len(stdout), stdout[:300], len(stderr), stderr[:300],
             )
             return _cap_output(f"Command failed (exit {result.returncode}):\n{cmd}\n{out}")
-        logger.info(
-            f"[run_command] ✅ 命令成功 ({elapsed:.2f}s, output={len(out)} chars): {cmd[:120]}"
-        )
+        logger.info("[run_command] 命令成功 (%.2fs, output=%d chars): %s", elapsed, len(out), cmd[:120])
         return _cap_output(out.strip()) or "(no output)"
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - t0
-        logger.error(f"[run_command] ⏰ 命令超时 ({elapsed:.2f}s, limit={timeout}s): {cmd}")
+        logger.error("[run_command] 命令超时 (%.2fs, limit=%ss): %s", elapsed, timeout, cmd)
         return f"Command timed out after {timeout}s."
     except Exception as e:
         elapsed = time.monotonic() - t0
-        logger.error(f"[run_command] 💥 异常 ({elapsed:.2f}s): {cmd}, error={e}")
+        logger.error("[run_command] 异常 (%.2fs): %s, error=%s", elapsed, cmd, e)
         return str(e)
 
 
@@ -104,12 +101,12 @@ def run_script(
     try:
         script = _render(script_tpl, arguments)
     except Exception as e:
-        logger.error(f"[run_script] 模板渲染失败: args={arguments}, error={e}")
+        logger.error("[run_script] 模板渲染失败: args=%s, error=%s", arguments, e)
         return f"Template error: {e}"
     script = os.path.expandvars(script)
     if not script.strip().startswith("#!"):
         script = "#!/bin/bash\n" + script
-    logger.info(f"[run_script] 执行脚本 ({len(script)} chars): {script[:200]}")
+    logger.info("[run_script] 执行脚本 (%d chars): %s", len(script), script[:200])
     fd, path = tempfile.mkstemp(suffix=".sh")
     t0 = time.monotonic()
     try:
@@ -128,20 +125,19 @@ def run_script(
         out = stdout + stderr
         if result.returncode != 0:
             logger.warning(
-                f"[run_script] ❌ 脚本失败 (exit {result.returncode}, {elapsed:.2f}s)\n"
-                f"  stdout({len(stdout)}): {stdout[:300]}\n"
-                f"  stderr({len(stderr)}): {stderr[:300]}"
+                "[run_script] 脚本失败 (exit %s, %.2fs)\n  stdout(%d): %s\n  stderr(%d): %s",
+                result.returncode, elapsed, len(stdout), stdout[:300], len(stderr), stderr[:300],
             )
             return _cap_output(f"Script failed (exit {result.returncode}):\n{out}")
-        logger.info(f"[run_script] ✅ 脚本成功 ({elapsed:.2f}s, output={len(out)} chars)")
+        logger.info("[run_script] 脚本成功 (%.2fs, output=%d chars)", elapsed, len(out))
         return _cap_output(out.strip()) or "(no output)"
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - t0
-        logger.error(f"[run_script] ⏰ 脚本超时 ({elapsed:.2f}s, limit={timeout}s)")
+        logger.error("[run_script] 脚本超时 (%.2fs, limit=%ss)", elapsed, timeout)
         return f"Script timed out after {timeout}s."
     except Exception as e:
         elapsed = time.monotonic() - t0
-        logger.error(f"[run_script] 💥 异常 ({elapsed:.2f}s): error={e}")
+        logger.error("[run_script] 异常 (%.2fs): error=%s", elapsed, e)
         return str(e)
     finally:
         try:
