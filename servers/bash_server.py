@@ -212,6 +212,15 @@ def validate_image_and_commands(image: str, command_list: list) -> Tuple[bool, s
 server = Server("bash-mcp-server")
 
 
+def _json_text(payload: dict) -> list:
+    return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))]
+
+
+def _rejected(error: str) -> list:
+    """参数/校验未通过时的统一响应（仅负责 JSON 构造，不含校验逻辑）。"""
+    return _json_text({"success": False, "error": error, "stdout": "", "stderr": ""})
+
+
 @server.list_tools()
 async def list_tools():
     """定义 Bash / Kubectl 工具"""
@@ -280,14 +289,9 @@ async def call_tool(name: str, arguments: dict):
         timeout = clamp_timeout(int(arguments.get("timeout_seconds") or 60))
         ok, err = make_command_safe(command)
         if not ok:
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": err,
-                "stdout": "",
-                "stderr": "",
-            }, ensure_ascii=False))]
+            return _rejected(err)
         out = await anyio.to_thread.run_sync(execute_bash_command, command, timeout)
-        return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
+        return _json_text(out)
 
     if name == "kubectl_run_image":
         namespace = (arguments.get("namespace") or "").strip()
@@ -297,35 +301,15 @@ async def call_tool(name: str, arguments: dict):
         timeout = clamp_timeout(int(arguments.get("timeout_seconds") or 120))
 
         if not namespace or not NAMESPACE_RE.match(namespace):
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": "namespace 不合法或为空",
-                "stdout": "",
-                "stderr": "",
-            }, ensure_ascii=False))]
+            return _rejected("namespace 不合法或为空")
         if not pod_name or not NAMESPACE_RE.match(pod_name):
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": "pod_name 不合法或为空",
-                "stdout": "",
-                "stderr": "",
-            }, ensure_ascii=False))]
+            return _rejected("pod_name 不合法或为空")
         ok, err = validate_image_and_commands(image, command_list)
         if not ok:
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": err,
-                "stdout": "",
-                "stderr": "",
-            }, ensure_ascii=False))]
+            return _rejected(err)
 
         if not shutil.which("kubectl"):
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": "kubectl 未找到",
-                "stdout": "",
-                "stderr": "",
-            }, ensure_ascii=False))]
+            return _rejected("kubectl 未找到")
 
         cmd_parts = [
             "kubectl", "run", pod_name,
@@ -340,9 +324,9 @@ async def call_tool(name: str, arguments: dict):
         out = await anyio.to_thread.run_sync(
             functools.partial(_execute_command, cmd_parts, timeout=timeout, shell=False)
         )
-        return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
+        return _json_text(out)
 
-    return [TextContent(type="text", text=json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False))]
+    return _json_text({"error": f"未知工具: {name}"})
 
 
 async def main():
