@@ -17,6 +17,25 @@ from .mcp_logger import get_logger, log_command
 
 logger = get_logger("command")
 
+DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
+
+
+def _max_output_bytes() -> int:
+    try:
+        return int(os.environ.get("MCP_TOOL_MAX_OUTPUT_BYTES", DEFAULT_MAX_OUTPUT_BYTES))
+    except ValueError:
+        return DEFAULT_MAX_OUTPUT_BYTES
+
+
+def _cap_output(text: str) -> str:
+    """Bound tool output to MCP_TOOL_MAX_OUTPUT_BYTES with an explicit marker."""
+    limit = _max_output_bytes()
+    data = text.encode("utf-8")
+    if limit <= 0 or len(data) <= limit:
+        return text
+    kept = data[:limit].decode("utf-8", errors="ignore")
+    return f"{kept}\n...[output truncated: {len(data)} bytes exceeds limit of {limit} bytes]"
+
 
 def _render(template_str: str, params: Dict[str, Any]) -> str:
     if Template is None:
@@ -61,11 +80,11 @@ def run_command(
                 f"  stdout({len(stdout)}): {stdout[:300]}\n"
                 f"  stderr({len(stderr)}): {stderr[:300]}"
             )
-            return f"Command failed (exit {result.returncode}):\n{cmd}\n{out}"
+            return _cap_output(f"Command failed (exit {result.returncode}):\n{cmd}\n{out}")
         logger.info(
             f"[run_command] ✅ 命令成功 ({elapsed:.2f}s, output={len(out)} chars): {cmd[:120]}"
         )
-        return out.strip() or "(no output)"
+        return _cap_output(out.strip()) or "(no output)"
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - t0
         logger.error(f"[run_command] ⏰ 命令超时 ({elapsed:.2f}s, limit={timeout}s): {cmd}")
@@ -113,9 +132,9 @@ def run_script(
                 f"  stdout({len(stdout)}): {stdout[:300]}\n"
                 f"  stderr({len(stderr)}): {stderr[:300]}"
             )
-            return f"Script failed (exit {result.returncode}):\n{out}"
+            return _cap_output(f"Script failed (exit {result.returncode}):\n{out}")
         logger.info(f"[run_script] ✅ 脚本成功 ({elapsed:.2f}s, output={len(out)} chars)")
-        return out.strip() or "(no output)"
+        return _cap_output(out.strip()) or "(no output)"
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - t0
         logger.error(f"[run_script] ⏰ 脚本超时 ({elapsed:.2f}s, limit={timeout}s)")

@@ -29,6 +29,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+from holmes_tools.arg_utils import clamp_timeout
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result, log_command
 
 _SERVER = "bash-mcp"
@@ -276,7 +277,7 @@ async def call_tool(name: str, arguments: dict):
 
     if name == "run_bash_command":
         command = arguments.get("command", "").strip()
-        timeout = int(arguments.get("timeout_seconds") or 60)
+        timeout = clamp_timeout(int(arguments.get("timeout_seconds") or 60))
         ok, err = make_command_safe(command)
         if not ok:
             return [TextContent(type="text", text=json.dumps({
@@ -293,7 +294,7 @@ async def call_tool(name: str, arguments: dict):
         pod_name = (arguments.get("pod_name") or "").strip()
         image = (arguments.get("image") or "").strip()
         command_list = arguments.get("command") or []
-        timeout = int(arguments.get("timeout_seconds") or 120)
+        timeout = clamp_timeout(int(arguments.get("timeout_seconds") or 120))
 
         if not namespace or not NAMESPACE_RE.match(namespace):
             return [TextContent(type="text", text=json.dumps({

@@ -7,11 +7,13 @@ from typing import Optional
 
 from mcp.types import Tool
 
+from .arg_utils import clamp_timeout
+
 
 def _run_tcp_check(arguments: dict) -> str:
     host = arguments.get("host")
     port = arguments.get("port")
-    timeout = float(arguments.get("timeout", 3.0))
+    timeout = clamp_timeout(float(arguments.get("timeout", 3.0)))
     if host is None:
         return json.dumps({"ok": False, "error": "host is required"})
     if port is None:
