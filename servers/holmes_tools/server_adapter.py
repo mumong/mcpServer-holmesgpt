@@ -4,10 +4,12 @@ This adapter intentionally does not handle the observability-query server's
 structured errors or the aggregate server's per-module dispatch policy.
 """
 
+import functools
 import time
 from collections.abc import Callable
 from typing import Any
 
+import anyio.to_thread
 from mcp.types import TextContent
 
 from .arg_utils import sanitize_arguments_for_tools
@@ -52,3 +54,9 @@ def call_text_tool(
         elapsed = time.monotonic() - started
         log_result(server_name, name, None, elapsed, error=exc)
         return [TextContent(type="text", text=f"工具调用异常: {exc}")]
+
+
+async def call_text_tool_in_thread(*args: Any, **kwargs: Any) -> list[TextContent]:
+    """Run ``call_text_tool`` in a worker thread so blocking handlers
+    (subprocess/HTTP) do not stall the MCP event loop."""
+    return await anyio.to_thread.run_sync(functools.partial(call_text_tool, *args, **kwargs))

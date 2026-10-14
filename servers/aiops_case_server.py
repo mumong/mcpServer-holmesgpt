@@ -21,7 +21,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 from holmes_tools import aiops_case
-from holmes_tools.server_adapter import call_text_tool
+from holmes_tools.server_adapter import call_text_tool_in_thread
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result
 
 
@@ -36,7 +36,7 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    return call_text_tool(
+    return await call_text_tool_in_thread(
         _SERVER, name, arguments, aiops_case.call_tool,
         log_call=log_tool_call, log_result=log_tool_result,
         sanitize=True, catch_errors=True,

@@ -7,6 +7,8 @@ import os
 import sys
 import time
 
+import anyio.to_thread
+
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
@@ -65,7 +67,8 @@ async def call_tool(name: str, arguments: dict):
     log_tool_call(_SERVER, name, arguments)
     started = time.monotonic()
     try:
-        result = aiops_observability_query.call_tool(
+        result = await anyio.to_thread.run_sync(
+            aiops_observability_query.call_tool,
             name,
             arguments or {},
         )

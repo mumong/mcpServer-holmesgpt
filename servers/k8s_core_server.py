@@ -19,7 +19,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 from holmes_tools import kubernetes_core
-from holmes_tools.server_adapter import call_text_tool
+from holmes_tools.server_adapter import call_text_tool_in_thread
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result
 
 _SERVER = "k8s-core-mcp"
@@ -33,7 +33,7 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    return call_text_tool(
+    return await call_text_tool_in_thread(
         _SERVER, name, arguments, kubernetes_core.call_tool,
         log_call=log_tool_call, log_result=log_tool_result,
         # Lifecycle is an argv/data tool with typed list predicates, not a shell template.

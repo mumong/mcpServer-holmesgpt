@@ -15,6 +15,7 @@ Bash / Kubectl MCP Server
 """
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import shutil
 import time
 from typing import Tuple
 
+import anyio.to_thread
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
@@ -271,7 +273,6 @@ async def list_tools():
 async def call_tool(name: str, arguments: dict):
     """处理工具调用"""
     log_tool_call(_SERVER, name, arguments)
-    t0 = time.monotonic()
 
     if name == "run_bash_command":
         command = arguments.get("command", "").strip()
@@ -284,7 +285,7 @@ async def call_tool(name: str, arguments: dict):
                 "stdout": "",
                 "stderr": "",
             }, ensure_ascii=False))]
-        out = execute_bash_command(command, timeout=timeout)
+        out = await anyio.to_thread.run_sync(execute_bash_command, command, timeout)
         return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
 
     if name == "kubectl_run_image":
@@ -335,7 +336,9 @@ async def call_tool(name: str, arguments: dict):
         ]
         if command_list:
             cmd_parts.extend(["--", *command_list])
-        out = _execute_command(cmd_parts, timeout=timeout, shell=False)
+        out = await anyio.to_thread.run_sync(
+            functools.partial(_execute_command, cmd_parts, timeout=timeout, shell=False)
+        )
         return [TextContent(type="text", text=json.dumps(out, ensure_ascii=False))]
 
     return [TextContent(type="text", text=json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False))]

@@ -16,8 +16,9 @@ import asyncio
 import json
 import subprocess
 import shutil
-import time
 from typing import List, Dict, Any
+
+import anyio.to_thread
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
@@ -381,9 +382,12 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    """处理工具调用"""
+    """处理工具调用（helm 子进程在工作线程中执行，避免阻塞事件循环）"""
     log_tool_call(_SERVER, name, arguments)
-    t0 = time.monotonic()
+    return await anyio.to_thread.run_sync(_call_tool_sync, name, arguments)
+
+
+def _call_tool_sync(name: str, arguments: dict):
     # MCP 入口层清洗：仅保留标量，避免误传对象导致命令注入/语法错误（与 Holmes 内置工具改造一致）
     arguments = sanitize_arguments_for_tools(arguments or {})
 

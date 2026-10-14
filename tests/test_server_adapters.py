@@ -188,3 +188,17 @@ class AdapterLoggingOrderTests(unittest.TestCase):
             )
         self.assertEqual(ended.call_count, 1)
         self.assertEqual(str(ended.call_args.kwargs["error"]), "handler failure")
+
+    def test_threaded_adapter_runs_handler_off_the_event_loop_thread(self):
+        import threading
+        seen = []
+
+        def handler(name, arguments):
+            seen.append(threading.get_ident())
+            return "ok"
+
+        result = asyncio.run(self.adapter.call_text_tool_in_thread(
+            "fixture", "example", {}, handler, log_call=Mock(), log_result=Mock(),
+        ))
+        self.assertEqual(result[0].text, "ok")
+        self.assertNotEqual(seen, [threading.get_ident()])
