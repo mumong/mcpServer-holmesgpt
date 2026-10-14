@@ -46,17 +46,22 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "relationship_types": list(RELATIONSHIP_TYPES),
         "scope": {"kind": "Pod", "namespace": namespace, "pod": pod},
     }
-    if not namespace or not pod or not purpose:
+
+    def reject(code: str, message: str, entity: dict[str, Any] | None = None) -> dict[str, Any]:
         return error_result(
             source_system="kubernetes",
             dimension="topology",
             namespace=namespace,
             pod=pod,
             purpose=purpose,
-            code="invalid_arguments",
-            message="namespace, pod and purpose are required",
+            code=code,
+            message=message,
+            entity=entity,
             query=base_query,
         )
+
+    if not namespace or not pod or not purpose:
+        return reject("invalid_arguments", "namespace, pod and purpose are required")
 
     entity, entity_error = resolve_pod_scope(
         namespace,
@@ -64,16 +69,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         arguments.get("pod_uid"),
     )
     if entity_error:
-        return error_result(
-            source_system="kubernetes",
-            dimension="topology",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=entity_error["code"],
-            message=entity_error["message"],
-            query=base_query,
-        )
+        return reject(entity_error["code"], entity_error["message"])
     assert entity is not None
 
     window, window_error = bounded_window(
@@ -81,33 +77,17 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         not_before=entity.get("creation_timestamp"),
     )
     if window_error:
-        return error_result(
-            source_system="kubernetes",
-            dimension="topology",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code=window_error["code"],
-            message=window_error["message"],
-            entity=entity,
-            query=base_query,
-        )
+        return reject(window_error["code"], window_error["message"], entity)
     assert window is not None
     base_query["time_range"] = window
 
     timeout = get_config().timeout_seconds
     pod_json, pod_error = get_pod(namespace, pod, timeout=timeout)
     if pod_error or not pod_json:
-        return error_result(
-            source_system="kubernetes",
-            dimension="topology",
-            namespace=namespace,
-            pod=pod,
-            purpose=purpose,
-            code="kubernetes_error",
-            message=str(pod_error or "Kubernetes Pod query returned no object"),
-            entity=entity,
-            query=base_query,
+        return reject(
+            "kubernetes_error",
+            str(pod_error or "Kubernetes Pod query returned no object"),
+            entity,
         )
     if _pod_uid(pod_json) not in {"", str(entity.get("pod_uid") or "")}:
         return _lifecycle_error(
@@ -119,9 +99,8 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             message="target Pod identity changed while topology was collected",
         )
 
-    metadata = pod_json.get("metadata") or {}
     spec = pod_json.get("spec") or {}
-    labels = metadata.get("labels") or {}
+    labels = (pod_json.get("metadata") or {}).get("labels") or {}
     owner_chain, owner_status = resolve_owner_chain_with_status(
         pod_json,
         namespace,
@@ -132,122 +111,39 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         labels,
         timeout=timeout,
     )
-    source_status = {
+    base_query["source_status"] = {
         "owners": _source_status(owner_status),
         "services": _source_status(service_status),
     }
-    base_query["source_status"] = source_status
     limitations = _source_limitations(
         owners=owner_status,
         services=service_status,
     )
     observed_at = schemas.isoformat(schemas.utc_now()) or ""
 
-    facts: list[dict[str, Any]] = []
     pod_entity = _entity(
         "Pod",
         namespace,
         pod,
         uid=str(entity.get("pod_uid") or "") or None,
     )
-
-    owner_source = pod_entity
-    retained_owners = owner_chain[:MAX_OWNER_RELATIONSHIPS]
-    for owner in retained_owners:
-        target = _entity(
-            str(owner.get("kind") or "Owner"),
-            namespace,
-            str(owner.get("name") or ""),
-            uid=str(owner.get("uid") or "") or None,
-        )
-        if not target["name"]:
-            continue
-        facts.append(
-            _relationship_fact(
-                namespace=namespace,
-                pod=pod,
-                relation="owned_by",
-                source=owner_source,
-                target=target,
-                source_field="metadata.ownerReferences",
-                observed_at=observed_at,
-            )
-        )
-        owner_source = target
-
-    retained_services = services[:MAX_SERVICE_RELATIONSHIPS]
-    for service in retained_services:
-        service_name = str(service.get("name") or "")
-        selector = service.get("selector") or {}
-        if not service_name or not selector:
-            continue
-        selector = _compact_mapping(selector, max_items=4)
-        matched_labels = {
-            str(key): labels.get(key)
-            for key in selector
-            if key in labels
-        }
-        facts.append(
-            _relationship_fact(
-                namespace=namespace,
-                pod=pod,
-                relation="selects",
-                source=_entity(
-                    "Service",
-                    namespace,
-                    service_name,
-                    uid=str(service.get("uid") or "") or None,
-                    attributes={
-                        "cluster_ip": service.get("cluster_ip"),
-                    },
-                ),
-                target=pod_entity,
-                source_field="service.spec.selector + pod.metadata.labels",
-                observed_at=observed_at,
-                selector=selector,
-                matched_pod_labels=matched_labels,
-                cluster_ip=service.get("cluster_ip"),
-                ports=_compact_ports(service.get("ports")),
-            )
-        )
-
-    node_name = str(spec.get("nodeName") or "")
-    if node_name:
-        facts.append(
-            _relationship_fact(
-                namespace=namespace,
-                pod=pod,
-                relation="scheduled_on",
-                source=pod_entity,
-                target=_entity("Node", None, node_name),
-                source_field="pod.spec.nodeName",
-                observed_at=observed_at,
-            )
-        )
-
+    context = {"namespace": namespace, "pod": pod, "observed_at": observed_at}
     container_names = [
         str(item.get("name"))
         for item in spec.get("containers") or []
         if item.get("name")
     ]
-    retained_containers = container_names[:MAX_CONTAINER_RELATIONSHIPS]
-    for container_name in retained_containers:
-        facts.append(
-            _relationship_fact(
-                namespace=namespace,
-                pod=pod,
-                relation="owns_container",
-                source=pod_entity,
-                target=_entity(
-                    "Container",
-                    namespace,
-                    container_name,
-                    attributes={"pod": pod},
-                ),
-                source_field="pod.spec.containers[].name",
-                observed_at=observed_at,
-            )
-        )
+    retained = {
+        "owners": owner_chain[:MAX_OWNER_RELATIONSHIPS],
+        "services": services[:MAX_SERVICE_RELATIONSHIPS],
+        "containers": container_names[:MAX_CONTAINER_RELATIONSHIPS],
+    }
+    facts = [
+        *_owner_facts(context, pod_entity, retained["owners"]),
+        *_service_facts(context, pod_entity, retained["services"], labels),
+        *_node_facts(context, pod_entity, str(spec.get("nodeName") or "")),
+        *_container_facts(context, pod_entity, retained["containers"]),
+    ]
 
     current_entity, lifecycle_error = resolve_pod_scope(
         namespace,
@@ -267,11 +163,167 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             ),
         )
 
-    truncated = (
-        len(owner_chain) > len(retained_owners)
-        or len(services) > len(retained_services)
-        or len(container_names) > len(retained_containers)
+    matched_relationships = (
+        len(owner_chain)
+        + len(services)
+        + (1 if spec.get("nodeName") else 0)
+        + len(container_names)
     )
+    truncation_stages = _truncation_stages(
+        (
+            ("max_owner_relationships", len(owner_chain), len(retained["owners"])),
+            ("max_service_relationships", len(services), len(retained["services"])),
+            ("max_container_relationships", len(container_names), len(retained["containers"])),
+        )
+    )
+    return _query_result(
+        entity=entity,
+        purpose=purpose,
+        query=base_query,
+        facts=facts,
+        limitations=limitations,
+        matched_relationships=matched_relationships,
+        truncation_stages=truncation_stages,
+    )
+
+
+def _owner_facts(
+    context: dict[str, Any],
+    pod_entity: dict[str, Any],
+    owners: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Walk the retained ownerReferences chain: Pod -> ReplicaSet -> ..."""
+    facts: list[dict[str, Any]] = []
+    owner_source = pod_entity
+    for owner in owners:
+        target = _entity(
+            str(owner.get("kind") or "Owner"),
+            context["namespace"],
+            str(owner.get("name") or ""),
+            uid=str(owner.get("uid") or "") or None,
+        )
+        if not target["name"]:
+            continue
+        facts.append(
+            _relationship_fact(
+                **context,
+                relation="owned_by",
+                source=owner_source,
+                target=target,
+                source_field="metadata.ownerReferences",
+            )
+        )
+        owner_source = target
+    return facts
+
+
+def _service_facts(
+    context: dict[str, Any],
+    pod_entity: dict[str, Any],
+    services: list[dict[str, Any]],
+    labels: dict[str, Any],
+) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    for service in services:
+        service_name = str(service.get("name") or "")
+        selector = service.get("selector") or {}
+        if not service_name or not selector:
+            continue
+        selector = _compact_mapping(selector, max_items=4)
+        matched_labels = {
+            str(key): labels.get(key)
+            for key in selector
+            if key in labels
+        }
+        facts.append(
+            _relationship_fact(
+                **context,
+                relation="selects",
+                source=_entity(
+                    "Service",
+                    context["namespace"],
+                    service_name,
+                    uid=str(service.get("uid") or "") or None,
+                    attributes={
+                        "cluster_ip": service.get("cluster_ip"),
+                    },
+                ),
+                target=pod_entity,
+                source_field="service.spec.selector + pod.metadata.labels",
+                selector=selector,
+                matched_pod_labels=matched_labels,
+                cluster_ip=service.get("cluster_ip"),
+                ports=_compact_ports(service.get("ports")),
+            )
+        )
+    return facts
+
+
+def _node_facts(
+    context: dict[str, Any],
+    pod_entity: dict[str, Any],
+    node_name: str,
+) -> list[dict[str, Any]]:
+    if not node_name:
+        return []
+    return [
+        _relationship_fact(
+            **context,
+            relation="scheduled_on",
+            source=pod_entity,
+            target=_entity("Node", None, node_name),
+            source_field="pod.spec.nodeName",
+        )
+    ]
+
+
+def _container_facts(
+    context: dict[str, Any],
+    pod_entity: dict[str, Any],
+    container_names: list[str],
+) -> list[dict[str, Any]]:
+    return [
+        _relationship_fact(
+            **context,
+            relation="owns_container",
+            source=pod_entity,
+            target=_entity(
+                "Container",
+                context["namespace"],
+                container_name,
+                attributes={"pod": context["pod"]},
+            ),
+            source_field="pod.spec.containers[].name",
+        )
+        for container_name in container_names
+    ]
+
+
+def _truncation_stages(limits) -> list[dict[str, Any]]:
+    """One tool_query stage per relationship cap that dropped rows."""
+    return [
+        {
+            "stage": "tool_query",
+            "reason": reason,
+            "before": before,
+            "after": after,
+        }
+        for reason, before, after in limits
+        if before > after
+    ]
+
+
+def _query_result(
+    *,
+    entity: dict[str, Any],
+    purpose: str,
+    query: dict[str, Any],
+    facts: list[dict[str, Any]],
+    limitations: list[Any],
+    matched_relationships: int,
+    truncation_stages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    truncated = bool(truncation_stages)
     coverage = (
         "partial"
         if limitations
@@ -284,27 +336,6 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         coverage=coverage,
     )
     refs = [fact["ref"] for fact in facts]
-    matched_relationships = (
-        len(owner_chain)
-        + len(services)
-        + (1 if spec.get("nodeName") else 0)
-        + len(container_names)
-    )
-    truncation_stages = []
-    for reason, before, after in (
-        ("max_owner_relationships", len(owner_chain), len(retained_owners)),
-        ("max_service_relationships", len(services), len(retained_services)),
-        ("max_container_relationships", len(container_names), len(retained_containers)),
-    ):
-        if before > after:
-            truncation_stages.append(
-                {
-                    "stage": "tool_query",
-                    "reason": reason,
-                    "before": before,
-                    "after": after,
-                }
-            )
     result = {
         "ok": not limitations,
         "status": "query_partial" if limitations else "query_succeeded",
@@ -314,7 +345,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "purpose": purpose,
         "coverage": coverage,
         "directness": "related_context" if limitations else "direct",
-        "query": base_query,
+        "query": query,
         "facts": facts,
         "samples": [],
         "entities": entities,
