@@ -5,6 +5,13 @@ from unittest.mock import patch
 from servers.aiops_observability.query import metrics
 
 
+def _assert_query_call(backend, path, params):
+    """The metric query is the first backend call; an empty result may add a vocabulary lookup."""
+    assert backend.call_args_list[0].args == (path, params), backend.call_args_list[0]
+    for extra in backend.call_args_list[1:]:
+        assert extra.args[0] == "api/v1/label/__name__/values", extra
+
+
 class MetricsScopeTests(unittest.TestCase):
     def test_rejects_unscoped_vector_selector(self):
         error = metrics.validate_promql_scope(
@@ -406,7 +413,7 @@ class MetricsResultTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -465,7 +472,7 @@ class MetricsResultTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -532,7 +539,7 @@ class MetricsResultTests(unittest.TestCase):
             },
         )
         self.assertNotIn("time_range_adjustment", result["query"])
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": promql,
@@ -618,7 +625,7 @@ class MetricsResultTests(unittest.TestCase):
             result["query"]["pod_creation_timestamp"],
             "2026-07-23T07:25:45Z",
         )
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": promql,
@@ -704,7 +711,7 @@ class MetricsResultTests(unittest.TestCase):
                 "action": "replaced_with_current_bounded_window",
             },
         )
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": promql,
@@ -790,7 +797,7 @@ class MetricsResultTests(unittest.TestCase):
                 "action": "replaced_with_current_bounded_window",
             },
         )
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": promql,
@@ -1089,7 +1096,7 @@ class MetricsResultTests(unittest.TestCase):
             result["query"]["pod_creation_timestamp"],
             "2026-07-23T07:25:45Z",
         )
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -1176,7 +1183,7 @@ class MetricsResultTests(unittest.TestCase):
                         "action": "replaced_with_current_bounded_window",
                     },
                 )
-                backend.assert_called_once_with(
+                _assert_query_call(backend, 
                     "api/v1/query_range",
                     {
                         "query": promql,
@@ -1286,7 +1293,7 @@ class MetricsResultTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -1388,7 +1395,7 @@ class MetricsResultTests(unittest.TestCase):
                 },
             },
         )
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": promql,
@@ -1477,7 +1484,7 @@ class MetricsResultTests(unittest.TestCase):
                 },
             },
         )
-        backend.assert_called_once_with(
+        _assert_query_call(backend, 
             "api/v1/query_range",
             {
                 "query": promql,
@@ -1892,3 +1899,74 @@ class MetricsResultTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetricsQuoteStyleAndVocabularyTests(unittest.TestCase):
+    def test_accepts_single_quoted_and_backtick_matchers(self):
+        for promql in (
+            "kube_pod_container_status_restarts_total{namespace='ns',pod='pod'}",
+            "container_memory_working_set_bytes{namespace=`ns`, pod=`pod`}",
+            'rate(container_cpu_usage_seconds_total{namespace=\'ns\',pod="pod"}[5m])',
+        ):
+            self.assertIsNone(metrics.validate_promql_scope(promql, "ns", "pod"), promql)
+
+    def test_single_quoted_regex_pod_matcher_is_still_rejected(self):
+        error = metrics.validate_promql_scope(
+            "kube_pod_status_phase{namespace='ns',pod=~'pod.*'}", "ns", "pod"
+        )
+        self.assertEqual(error["error_code"], "missing_pod_scope")
+
+    def test_quoted_text_never_counts_as_an_unscoped_selector(self):
+        error = metrics.validate_promql_scope(
+            "label_replace(up{namespace='ns',pod='pod'}, 'x', 'up or down', '', '')", "ns", "pod"
+        )
+        self.assertIsNone(error)
+
+    def test_scope_rejection_carries_source_backed_metric_vocabulary(self):
+        names = {"status": "success", "data": ["kube_pod_status_phase", "container_memory_working_set_bytes"]}
+        with patch.object(metrics, "_request_prometheus", return_value=(names, 200)) as request:
+            result = metrics.execute({
+                "namespace": "ns", "pod": "pod", "purpose": "memory",
+                "promql": "node_memory_MemAvailable_bytes", "query_type": "instant",
+            })
+        self.assertEqual(result["error"]["code"], "missing_pod_scope")
+        self.assertEqual(request.call_args.args[0], "api/v1/label/__name__/values")
+        self.assertEqual(request.call_args.args[1]["match[]"], '{namespace="ns",pod="pod"}')
+        self.assertIn("2 metric names have series for this Pod", result["limitations"][0])
+        self.assertIn("container_memory_working_set_bytes,kube_pod_status_phase", result["limitations"][0])
+
+    def test_empty_success_carries_vocabulary_and_failed_lookup_is_silent(self):
+        entity = {"kind": "Pod", "namespace": "ns", "pod": "pod", "pod_uid": "uid-1",
+                  "pod_ip": None, "node": "node1", "containers": ["api"]}
+        empty = {"status": "success", "data": {"resultType": "vector", "result": []}}
+        arguments = {"namespace": "ns", "pod": "pod", "purpose": "cpu",
+                     "promql": 'container_cpu_usage_seconds_total{namespace="ns",pod="pod"}',
+                     "query_type": "instant"}
+        with (
+            patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
+            patch.object(metrics, "_request_prometheus",
+                         side_effect=[(empty, 200), ({"status": "success", "data": []}, 200)]),
+        ):
+            result = metrics.execute(arguments)
+        self.assertEqual(result["coverage"], "empty")
+        self.assertEqual(result["limitations"], ["no metric has series for this Pod in the last 60m"])
+        with (
+            patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
+            patch.object(metrics, "_request_prometheus",
+                         side_effect=[(empty, 200), ({"status": "error", "error": "down"}, None)]),
+        ):
+            result = metrics.execute(arguments)
+        self.assertEqual(result["coverage"], "empty")
+        self.assertNotIn("limitations", result)
+
+    def test_vocabulary_is_bounded(self):
+        names = {"status": "success", "data": [f"metric_{i:03d}_with_a_long_name" for i in range(300)]}
+        with patch.object(metrics, "_request_prometheus", return_value=(names, 200)):
+            result = metrics.execute({
+                "namespace": "ns", "pod": "pod", "purpose": "p",
+                "promql": "up", "query_type": "instant",
+            })
+        note = result["limitations"][0]
+        self.assertLessEqual(len(note), metrics.MAX_METRIC_NAME_HINT_CHARS + 200)
+        self.assertIn("300 metric names", note)
+        self.assertIn("more)", note)

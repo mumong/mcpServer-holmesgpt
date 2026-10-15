@@ -61,7 +61,7 @@ TOOL = Tool(
             "pod": {"type": "string", "description": "Exact Pod name; requires namespace."},
             "label_selector": {"type": "string", "description": "Optional Kubernetes label selector for lists."},
             "window_minutes": {"type": "integer", "minimum": 1, "maximum": 1440, "default": 10},
-            "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+            "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
             "continue_token": {"type": "string", "description": "Opaque token returned by this tool; keep scope unchanged."},
             **(pod_record_query.PROPERTIES if pod_record_query.enabled() else {}),
         },
@@ -159,7 +159,7 @@ def query(arguments):
         if pod and (not namespace or selector or token):
             raise ValueError("pod requires namespace and cannot be combined with selector/continue_token")
         window = _integer(arguments, "window_minutes", 10, 1440)
-        limit = _integer(arguments, "page_size", 50, 100)
+        limit = _integer(arguments, "page_size", 100, 100)
         path = "/api/v1/" + (f"namespaces/{quote(namespace, safe='')}/" if namespace else "") + "pods"
         if pod:
             path += "/" + quote(pod, safe="")

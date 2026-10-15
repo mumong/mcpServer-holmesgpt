@@ -13,6 +13,7 @@ CONTAINER_FIELDS = POD_FIELDS + [
     "last_exit_code", "last_finished_at", "latest_observed_termination_at",
     "termination_within_window", "resources", "current_state",
 ]
+NON_SCALAR_FIELDS = {"conditions", "condition_states", "state", "current_state", "last_state", "resources"}
 DEFAULT_FIELDS = {
     "pod": ["namespace", "pod", "uid", "node", "phase", "ready", "deletion_timestamp", "condition_states"],
     "container": ["namespace", "pod", "uid", "container", "role", "ready", "current_state",
@@ -62,8 +63,10 @@ def prepare(arguments):
         raise ValueError("record_type must be pod or container")
     query = {k: arguments[k] for k in QUERY_KEYS if k in arguments}
     parsed = validate_query(query, POD_FIELDS if kind == "pod" else CONTAINER_FIELDS, DEFAULT_FIELDS[kind])
-    if parsed.get("group_by") in {"conditions", "condition_states", "state", "current_state", "last_state", "resources"}:
-        raise ValueError("group_by requires a scalar field")
+    if parsed.get("group_by") in NON_SCALAR_FIELDS:
+        fields = POD_FIELDS if kind == "pod" else CONTAINER_FIELDS
+        scalar = ", ".join(f for f in fields if f not in NON_SCALAR_FIELDS)
+        raise ValueError(f"group_by requires a scalar field; available for {kind} rows: {scalar}")
     limit = int(os.getenv("AIOPS_RECORD_RESULT_MAX_BYTES", "12000"))
     if not 1024 <= limit <= 65536:
         raise ValueError("AIOPS_RECORD_RESULT_MAX_BYTES must be between 1024 and 65536")

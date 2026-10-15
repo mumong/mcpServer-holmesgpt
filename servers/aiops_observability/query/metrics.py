@@ -27,6 +27,12 @@ except ImportError:  # pragma: no cover
 
 MAX_PROMQL_LENGTH = 2000
 MAX_SERIES = 20
+PROMQL_QUOTES = ('"', "'", "`")
+# Source-backed metric vocabulary attached to rejected/empty queries so the next
+# query is chosen from names that really have series for this Pod.
+METRIC_NAME_HINT_WINDOW_SECONDS = 60 * 60
+MAX_METRIC_NAME_HINTS = 100
+MAX_METRIC_NAME_HINT_CHARS = 2200
 MAX_SAMPLES = 20
 MAX_EVALUATION_POINTS = 500
 SCRAPER_LABELS = {
@@ -87,14 +93,7 @@ def validate_promql_scope(
     selector_spans: list[tuple[int, int]] = []
     for match in re.finditer(r"\{([^{}]*)\}", masked):
         selector_spans.append(match.span())
-        original_selector = text[match.start() + 1 : match.end() - 1]
-        matchers = {
-            label: (operator, value)
-            for label, operator, value in re.findall(
-                r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:\\.|[^"\\])*)"',
-                original_selector,
-            )
-        }
+        matchers = _selector_matchers(text[match.start() + 1 : match.end() - 1])
         if matchers.get("namespace") != ("=", namespace) or matchers.get("pod") != ("=", pod):
             return {
                 "error_code": "missing_pod_scope",
@@ -470,7 +469,10 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     argument_error = _argument_error(namespace, pod, purpose, promql, query_type)
     if argument_error:
         code, message = argument_error
-        return _metrics_error(namespace, pod, purpose, code, message, base_query)
+        result = _metrics_error(namespace, pod, purpose, code, message, base_query)
+        if code == "missing_pod_scope":
+            _attach_metric_vocabulary(result, namespace, pod)
+        return result
 
     # Stage 2: resolve the target Pod identity.
     entity, entity_error = resolve_pod_scope(
@@ -511,9 +513,59 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     # Stage 6: build the success contract.
-    return _success_result(
+    result = _success_result(
         payload, entity, namespace, pod, purpose, query_type, base_query, status_code
     )
+    if result.get("coverage") == "empty":
+        _attach_metric_vocabulary(result, namespace, pod)
+    return result
+
+
+def pod_metric_names(namespace: str, pod: str) -> list[str] | None:
+    """Metric names with at least one series for this exact Pod in the last hour.
+
+    Vocabulary only: the model still chooses the metric from its purpose. ``None``
+    means the lookup itself failed, which is different from an empty vocabulary.
+    """
+    if not all(re.fullmatch(r"[A-Za-z0-9_.-]+", value or "") for value in (namespace, pod)):
+        return None
+    end = datetime.now(timezone.utc)
+    start = end.timestamp() - METRIC_NAME_HINT_WINDOW_SECONDS
+    payload, _ = _request_prometheus(
+        "api/v1/label/__name__/values",
+        {
+            "match[]": f'{{namespace="{namespace}",pod="{pod}"}}',
+            "start": f"{start:.0f}",
+            "end": f"{end.timestamp():.0f}",
+        },
+    )
+    names = payload.get("data")
+    if payload.get("status") != "success" or not isinstance(names, list):
+        return None
+    return sorted({str(name) for name in names if name})
+
+
+def _attach_metric_vocabulary(result: dict[str, Any], namespace: str, pod: str) -> None:
+    names = pod_metric_names(namespace, pod)
+    if names is None:
+        return
+    window = METRIC_NAME_HINT_WINDOW_SECONDS // 60
+    if not names:
+        note = f"no metric has series for this Pod in the last {window}m"
+    else:
+        shown, used = [], 0
+        for name in names[:MAX_METRIC_NAME_HINTS]:
+            if used + len(name) + 1 > MAX_METRIC_NAME_HINT_CHARS:
+                break
+            shown.append(name)
+            used += len(name) + 1
+        omitted = len(names) - len(shown)
+        note = (
+            f"{len(names)} metric names have series for this Pod in the last {window}m; "
+            "choose from them instead of guessing: " + ",".join(shown)
+            + (f" (+{omitted} more)" if omitted else "")
+        )
+    result.setdefault("limitations", []).append(note)
 
 
 def _request_prometheus(
@@ -736,22 +788,35 @@ def _point_count(item: dict[str, Any]) -> int:
 
 
 def _mask_quoted_strings(value: str) -> str:
+    # PromQL string literals may use double quotes, single quotes or backticks.
     chars = list(value)
-    in_quote = False
+    quote = ""
     escaped = False
     for index, char in enumerate(chars):
-        if in_quote:
+        if quote:
             if escaped:
                 escaped = False
-            elif char == "\\":
+            elif char == "\\" and quote != "`":
                 escaped = True
-            elif char == '"':
-                in_quote = False
+            elif char == quote:
+                quote = ""
             else:
                 chars[index] = " "
-        elif char == '"':
-            in_quote = True
+        elif char in PROMQL_QUOTES:
+            quote = char
     return "".join(chars)
+
+
+def _selector_matchers(selector: str) -> dict[str, tuple[str, str]]:
+    """{label: (operator, value)} for every matcher, whichever quote style is used."""
+    matchers = {}
+    for label, operator, double, single, raw in re.findall(
+        r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*'
+        r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\'|`([^`]*)`)',
+        selector,
+    ):
+        matchers[label] = (operator, double or single or raw)
+    return matchers
 
 
 def _inside_spans(index: int, spans: list[tuple[int, int]]) -> bool:
