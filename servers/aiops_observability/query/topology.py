@@ -23,12 +23,7 @@ from .common import (
 MAX_OWNER_RELATIONSHIPS = 2
 MAX_SERVICE_RELATIONSHIPS = 1
 MAX_CONTAINER_RELATIONSHIPS = 1
-MAX_RELATIONSHIPS = (
-    1
-    + MAX_OWNER_RELATIONSHIPS
-    + MAX_SERVICE_RELATIONSHIPS
-    + MAX_CONTAINER_RELATIONSHIPS
-)
+MAX_RELATIONSHIPS = 1 + MAX_OWNER_RELATIONSHIPS + MAX_SERVICE_RELATIONSHIPS + MAX_CONTAINER_RELATIONSHIPS
 RELATIONSHIP_TYPES = (
     "owned_by",
     "selects",
@@ -127,11 +122,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         uid=str(entity.get("pod_uid") or "") or None,
     )
     context = {"namespace": namespace, "pod": pod, "observed_at": observed_at}
-    container_names = [
-        str(item.get("name"))
-        for item in spec.get("containers") or []
-        if item.get("name")
-    ]
+    container_names = [str(item.get("name")) for item in spec.get("containers") or [] if item.get("name")]
     retained = {
         "owners": owner_chain[:MAX_OWNER_RELATIONSHIPS],
         "services": services[:MAX_SERVICE_RELATIONSHIPS],
@@ -163,10 +154,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     matched_relationships = (
-        len(owner_chain)
-        + len(services)
-        + (1 if spec.get("nodeName") else 0)
-        + len(container_names)
+        len(owner_chain) + len(services) + (1 if spec.get("nodeName") else 0) + len(container_names)
     )
     truncation_stages = _truncation_stages(
         (
@@ -229,11 +217,7 @@ def _service_facts(
         if not service_name or not selector:
             continue
         selector = _compact_mapping(selector, max_items=4)
-        matched_labels = {
-            str(key): labels.get(key)
-            for key in selector
-            if key in labels
-        }
+        matched_labels = {str(key): labels.get(key) for key in selector if key in labels}
         facts.append(
             _relationship_fact(
                 **context,
@@ -323,13 +307,7 @@ def _query_result(
     truncation_stages: list[dict[str, Any]],
 ) -> dict[str, Any]:
     truncated = bool(truncation_stages)
-    coverage = (
-        "partial"
-        if limitations
-        else "present"
-        if facts
-        else "empty"
-    )
+    coverage = "partial" if limitations else "present" if facts else "empty"
     entities, edges, topology_summary = _topology_graph(
         facts,
         coverage=coverage,
@@ -394,9 +372,7 @@ def _relationship_fact(
     value = {
         "relation": relation,
         "relationship": (
-            f"{source.get('kind') or 'Entity'} "
-            f"--{relation}--> "
-            f"{target.get('kind') or 'Entity'}"
+            f"{source.get('kind') or 'Entity'} --{relation}--> {target.get('kind') or 'Entity'}"
         ),
         "source": source,
         "target": target,
@@ -530,10 +506,7 @@ def _source_limitations(
             {
                 "source": source,
                 "status": value,
-                "message": str(
-                    status.get("error")
-                    or f"{source} topology lookup was {value}"
-                )[:500],
+                "message": str(status.get("error") or f"{source} topology lookup was {value}")[:500],
             }
         )
     return limitations
@@ -546,23 +519,14 @@ def _compact_mapping(
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    return {
-        str(key): item
-        for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))[
-            :max_items
-        ]
-    }
+    return {str(key): item for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))[:max_items]}
 
 
 def _compact_ports(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [
-        {
-            key: item.get(key)
-            for key in ("port", "targetPort")
-            if item.get(key) is not None
-        }
+        {key: item.get(key) for key in ("port", "targetPort") if item.get(key) is not None}
         for item in value[:2]
         if isinstance(item, dict)
     ]

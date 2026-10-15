@@ -4,6 +4,7 @@ runbook 工具：fetch_runbook
 根据 runbook_id（.md 文件名或路径）从配置的搜索路径读取 Runbook 内容。
 通过环境变量 RUNBOOK_SEARCH_PATH 配置多个搜索目录（逗号或冒号分隔），默认仅当前目录。
 """
+
 import os
 import textwrap
 from typing import List, Optional

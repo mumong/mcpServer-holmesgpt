@@ -276,10 +276,7 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str | None:
                 pod=str(safe_arguments.get("pod") or ""),
                 purpose=str(safe_arguments.get("purpose") or ""),
                 code="input_budget_exceeded",
-                message=(
-                    "serialized tool input exceeds the "
-                    f"{MAX_INPUT_BYTES}-byte execution budget"
-                ),
+                message=(f"serialized tool input exceeds the {MAX_INPUT_BYTES}-byte execution budget"),
                 query=query_descriptor(safe_arguments, executed=False),
             )
         )

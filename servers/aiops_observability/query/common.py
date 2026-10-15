@@ -103,17 +103,10 @@ def resolve_pod_scope(
     if requested_uid and observed_uid and requested_uid != observed_uid:
         return None, {
             "code": "pod_uid_conflict",
-            "message": (
-                f"current Pod UID {observed_uid} does not match supplied UID "
-                f"{requested_uid}"
-            ),
+            "message": (f"current Pod UID {observed_uid} does not match supplied UID {requested_uid}"),
         }
 
-    containers = [
-        str(item.get("name"))
-        for item in spec.get("containers") or []
-        if item.get("name")
-    ]
+    containers = [str(item.get("name")) for item in spec.get("containers") or [] if item.get("name")]
     return {
         "kind": "Pod",
         "namespace": str(metadata.get("namespace") or namespace),
@@ -168,11 +161,7 @@ def normalize_time_window(
 ) -> tuple[NormalizedTimeWindow | None, dict[str, str] | None]:
     start_text = str(arguments.get("start") or "").strip()
     end_text = str(arguments.get("end") or "").strip()
-    requested = {
-        key: value
-        for key, value in (("start", start_text), ("end", end_text))
-        if value
-    }
+    requested = {key: value for key, value in (("start", start_text), ("end", end_text)) if value}
     try:
         raw_window_minutes = arguments.get("window_minutes")
         window_minutes = max(
@@ -182,11 +171,7 @@ def normalize_time_window(
     except (TypeError, ValueError, OverflowError) as exc:
         return None, {"code": "invalid_time_range", "message": str(exc)}
 
-    lookback_seconds = (
-        _parse_lookback_seconds(start_text)
-        if start_text and not end_text
-        else None
-    )
+    lookback_seconds = _parse_lookback_seconds(start_text) if start_text and not end_text else None
     if lookback_seconds is not None:
         if lookback_seconds <= 0:
             return None, {
@@ -296,9 +281,7 @@ def _parse_aware_datetime(value: str) -> datetime:
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(
-            "explicit timestamps must include Z or a UTC offset"
-        )
+        raise ValueError("explicit timestamps must include Z or a UTC offset")
     return parsed.astimezone(timezone.utc)
 
 
@@ -408,9 +391,7 @@ def _filter_topology_facts_by_provenance(payload: dict[str, Any]) -> bool:
     facts = payload.get("facts")
     if not isinstance(facts, list):
         return False
-    retained = [
-        fact for fact in facts if _topology_fact_has_allowed_provenance(fact)
-    ]
+    retained = [fact for fact in facts if _topology_fact_has_allowed_provenance(fact)]
     if len(retained) == len(facts):
         return False
     payload["facts"] = retained
@@ -431,10 +412,7 @@ def _topology_fact_has_allowed_provenance(fact: Any) -> bool:
         if not isinstance(endpoint, dict):
             continue
         source_system = str(endpoint.get("source_system") or "").strip()
-        if (
-            source_system
-            and source_system not in _TOPOLOGY_SOURCE_SYSTEMS
-        ):
+        if source_system and source_system not in _TOPOLOGY_SOURCE_SYSTEMS:
             return False
     return True
 
@@ -470,9 +448,7 @@ def _sync_topology_projection(payload: dict[str, Any]) -> None:
 
     source_system = str(payload.get("source_system") or "kubernetes")
     existing_entities = payload.get("entities")
-    existing_entity_list = (
-        existing_entities if isinstance(existing_entities, list) else []
-    )
+    existing_entity_list = existing_entities if isinstance(existing_entities, list) else []
     entities_by_id: dict[str, dict[str, Any]] = {
         str(entity.get("entity_id")): entity
         for entity in existing_entity_list
@@ -483,9 +459,7 @@ def _sync_topology_projection(payload: dict[str, Any]) -> None:
     for fact in facts:
         if not isinstance(fact, dict):
             continue
-        fact_source_system = str(
-            fact.get("source_system") or source_system
-        )
+        fact_source_system = str(fact.get("source_system") or source_system)
         value = fact.get("value")
         if not isinstance(value, dict):
             continue
@@ -532,11 +506,7 @@ def _sync_topology_projection(payload: dict[str, Any]) -> None:
                 }
             )
 
-    entities = [
-        entity
-        for entity_id, entity in entities_by_id.items()
-        if entity_id in retained_entity_ids
-    ]
+    entities = [entity for entity_id, entity in entities_by_id.items() if entity_id in retained_entity_ids]
     relations = Counter(str(edge.get("relation") or "unknown") for edge in edges)
     payload["entities"] = entities
     payload["edges"] = edges
@@ -566,9 +536,7 @@ def _sync_evidence_refs(payload: dict[str, Any]) -> None:
         payload["evidence_refs"] = []
         return
     payload["evidence_refs"] = [
-        str(fact["ref"])
-        for fact in facts
-        if isinstance(fact, dict) and fact.get("ref")
+        str(fact["ref"]) for fact in facts if isinstance(fact, dict) and fact.get("ref")
     ]
 
 
@@ -597,9 +565,7 @@ def _sync_correlations(
         item
         for item in correlations
         if isinstance(item, dict)
-        and {"deepflow", "tempo"}.issubset(
-            sources_by_trace.get(str(item.get("trace_id") or ""), set())
-        )
+        and {"deepflow", "tempo"}.issubset(sources_by_trace.get(str(item.get("trace_id") or ""), set()))
     ]
 
 

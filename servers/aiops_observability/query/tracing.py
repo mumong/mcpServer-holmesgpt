@@ -96,10 +96,7 @@ def build_deepflow_sql(
     if trace_id:
         conditions.append(f"trace_id = '{_safe_trace_id(trace_id)}'")
     if request_resource:
-        conditions.append(
-            "positionCaseInsensitive(request_resource, "
-            f"'{_sql_string(request_resource)}') > 0"
-        )
+        conditions.append(f"positionCaseInsensitive(request_resource, '{_sql_string(request_resource)}') > 0")
     where = " AND ".join(conditions)
     return (
         "SELECT toString(flow.time) AS time, "
@@ -156,10 +153,7 @@ def _parse_filters(
         )
     protocols = _bounded_strings(arguments.get("protocols"), 6)
     response_statuses = _bounded_strings(arguments.get("response_statuses"), 6)
-    response_codes = [
-        int(value)
-        for value in (arguments.get("response_codes") or [])[:12]
-    ]
+    response_codes = [int(value) for value in (arguments.get("response_codes") or [])[:12]]
     trace_id = str(arguments.get("trace_id") or "").strip() or None
     if trace_id:
         try:
@@ -205,11 +199,7 @@ def _tempo_for_trace_ids(
             trace_ids=trace_ids,
             service=service,
         )
-    return _tempo_not_executed(
-        "include_tempo=false"
-        if not include_tempo
-        else "no_valid_trace_ids"
-    )
+    return _tempo_not_executed("include_tempo=false" if not include_tempo else "no_valid_trace_ids")
 
 
 def _tempo_telemetry(
@@ -220,11 +210,7 @@ def _tempo_telemetry(
         "coverage": str(tempo_result.get("coverage") or "empty"),
         "executed": bool(tempo_result.get("executed")),
         "query_meta": tempo_result.get("query_meta") or {},
-        **(
-            {"reason": tempo_result.get("reason")}
-            if tempo_result.get("reason")
-            else {}
-        ),
+        **({"reason": tempo_result.get("reason")} if tempo_result.get("reason") else {}),
         **({"error": tempo_error} if tempo_error else {}),
     }
 
@@ -265,8 +251,7 @@ def _execute_without_pod_ip(
             "supplied trace ID, but no Pod-scoped DeepFlow flow association "
             "can be verified"
             if trace_id
-            else
-            "pod_ip is empty; Pod-scoped DeepFlow flow lookup cannot be executed"
+            else "pod_ip is empty; Pod-scoped DeepFlow flow lookup cannot be executed"
         )
     ]
     if tempo_error:
@@ -314,11 +299,7 @@ def _execute_without_pod_ip(
         "dimension": "tracing",
         "entity": entity,
         "purpose": purpose,
-        "coverage": (
-            "present"
-            if spans
-            else (tempo_coverage if trace_id else "empty")
-        ),
+        "coverage": ("present" if spans else (tempo_coverage if trace_id else "empty")),
         "directness": "related_context" if trace_id else "direct",
         "query": query,
         "facts": facts,
@@ -383,9 +364,7 @@ def _build_filtered_sql(
 ) -> tuple[str, int | None]:
     """Build the model-filtered DeepFlow SQL; raises TypeError/ValueError."""
     min_duration_us = (
-        int(arguments["min_duration_us"])
-        if arguments.get("min_duration_us") is not None
-        else None
+        int(arguments["min_duration_us"]) if arguments.get("min_duration_us") is not None else None
     )
     sql = build_deepflow_sql(
         database=get_config().deepflow_clickhouse_database,
@@ -442,9 +421,7 @@ def _flow_limitations(
             "bounded Pod-scoped baseline query also returned no flows"
         )
     if baseline_error:
-        limitations.append(
-            f"Pod-scoped baseline query failed: {baseline_error}"
-        )
+        limitations.append(f"Pod-scoped baseline query failed: {baseline_error}")
     if tempo_error:
         limitations.append(tempo_error)
     return limitations
@@ -495,9 +472,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         arguments.get("pod_uid"),
     )
     if entity_error:
-        return _error(
-            namespace, pod, purpose, entity_error["code"], entity_error["message"]
-        )
+        return _error(namespace, pod, purpose, entity_error["code"], entity_error["message"])
     assert entity is not None
     window, window_error = bounded_window(arguments)
     if window_error:
@@ -534,13 +509,9 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
 
     # Stage 1: filtered DeepFlow query, with a bounded baseline fallback.
     try:
-        sql, min_duration_us = _build_filtered_sql(
-            arguments, filters, pod_ip=pod_ip, window=window
-        )
+        sql, min_duration_us = _build_filtered_sql(arguments, filters, pod_ip=pod_ip, window=window)
     except (TypeError, ValueError) as exc:
-        return _error(
-            namespace, pod, purpose, "invalid_trace_filter", str(exc), entity=entity
-        )
+        return _error(namespace, pod, purpose, "invalid_trace_filter", str(exc), entity=entity)
     payload = _query_deepflow(sql)
     if payload.get("error"):
         return _error(
@@ -552,11 +523,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
             entity=entity,
             query={"sql": sql, "time_range": window},
         )
-    filtered_rows = (
-        payload.get("data")
-        if isinstance(payload.get("data"), list)
-        else []
-    )
+    filtered_rows = payload.get("data") if isinstance(payload.get("data"), list) else []
     rows = filtered_rows
     baseline_sql: str | None = None
     baseline_error: str | None = None
@@ -569,11 +536,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         or filters["peer_ip"]
         or filters["request_resource"]
     )
-    if (
-        not filtered_rows
-        and semantic_filters_present
-        and not trace_id
-    ):
+    if not filtered_rows and semantic_filters_present and not trace_id:
         baseline_attempted = True
         baseline_sql, baseline_rows, baseline_error = _run_baseline(
             pod_ip=pod_ip, window=window, max_records=max_records
@@ -584,16 +547,10 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     # Stage 2: normalize flows and correlate Tempo spans by trace ID.
     related_baseline = baseline_attempted and bool(rows)
     directness = "related_context" if related_baseline else "direct"
-    flows = _dedupe_records(
-        [_flow(row) for row in rows[:max_records] if isinstance(row, dict)]
-    )
+    flows = _dedupe_records([_flow(row) for row in rows[:max_records] if isinstance(row, dict)])
     trace_ids, invalid_trace_id_count = _validated_trace_ids(
         ([trace_id] if trace_id else [])
-        + [
-            str(flow.get("trace_id") or "")
-            for flow in flows
-            if flow.get("trace_id")
-        ]
+        + [str(flow.get("trace_id") or "") for flow in flows if flow.get("trace_id")]
     )
     tempo_result = _tempo_for_trace_ids(
         namespace,
@@ -612,13 +569,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "tempo": _tempo_telemetry(tempo_result, tempo_error),
     }
     correlations = _correlations(flows, spans)
-    samples = [
-        {"type": "flow", **flow}
-        for flow in flows
-    ] + [
-        {"type": "span", **span}
-        for span in spans
-    ]
+    samples = [{"type": "flow", **flow} for flow in flows] + [{"type": "span", **span} for span in spans]
     facts = _facts(
         namespace,
         pod,
@@ -777,9 +728,7 @@ def _query_tempo(
     if coverage == "present" and not spans:
         coverage = "empty"
         if service and filtered_out_count:
-            error = (
-                f"Tempo returned spans, but none matched service {service}"
-            )
+            error = f"Tempo returned spans, but none matched service {service}"
     return {
         "coverage": coverage,
         "spans": _dedupe_records(spans)[:8],
@@ -812,19 +761,11 @@ def _correlations(
     flows: list[dict[str, Any]],
     spans: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    span_ids = {
-        trace_id
-        for item in spans
-        if (trace_id := _valid_trace_id(item.get("trace_id")))
-    }
+    span_ids = {trace_id for item in spans if (trace_id := _valid_trace_id(item.get("trace_id")))}
     correlated_ids: list[str] = []
     for item in flows:
         trace_id = _valid_trace_id(item.get("trace_id"))
-        if (
-            trace_id
-            and trace_id in span_ids
-            and trace_id not in correlated_ids
-        ):
+        if trace_id and trace_id in span_ids and trace_id not in correlated_ids:
             correlated_ids.append(trace_id)
     return [
         {
@@ -897,21 +838,9 @@ def _facts(
         )
     span_facts: list[dict[str, Any]] = []
     for span in spans:
-        attributes = (
-            span.get("attributes")
-            if isinstance(span.get("attributes"), dict)
-            else {}
-        )
-        observed_pod = str(
-            attributes.get("k8s.pod.name")
-            or attributes.get("k8s.pod.name")
-            or ""
-        )
-        observed_uid = str(
-            attributes.get("k8s.pod.uid")
-            or attributes.get("k8s.pod.uid")
-            or ""
-        )
+        attributes = span.get("attributes") if isinstance(span.get("attributes"), dict) else {}
+        observed_pod = str(attributes.get("k8s.pod.name") or attributes.get("k8s.pod.name") or "")
+        observed_uid = str(attributes.get("k8s.pod.uid") or attributes.get("k8s.pod.uid") or "")
         directness = span_directness
         if span_directness == "direct":
             matches_scope = (
@@ -953,16 +882,8 @@ def _facts(
             used_span_indexes.add(span_index)
             break
 
-    remaining_flows = [
-        fact
-        for index, fact in enumerate(flow_facts)
-        if index not in used_flow_indexes
-    ]
-    remaining_spans = [
-        fact
-        for index, fact in enumerate(span_facts)
-        if index not in used_span_indexes
-    ]
+    remaining_flows = [fact for index, fact in enumerate(flow_facts) if index not in used_flow_indexes]
+    remaining_spans = [fact for index, fact in enumerate(span_facts) if index not in used_span_indexes]
     for index in range(max(len(remaining_flows), len(remaining_spans))):
         if index < len(remaining_flows):
             facts.append(remaining_flows[index])
@@ -1028,11 +949,7 @@ def _clickhouse_datetime(value: str) -> str:
 
 
 def _bounded_strings(value: Any, limit: int) -> list[str]:
-    items = [
-        str(item).strip()
-        for item in value or []
-        if str(item).strip()
-    ]
+    items = [str(item).strip() for item in value or [] if str(item).strip()]
     if len(items) > limit:
         raise ValueError(f"filter accepts at most {limit} values")
     return items
@@ -1055,9 +972,7 @@ def _response_status_condition(values: list[str]) -> str | None:
         if normalized.isdigit():
             status = int(normalized)
             if status > 255:
-                raise ValueError(
-                    f"unsupported response_status {value!r}; numeric values must fit UInt8"
-                )
+                raise ValueError(f"unsupported response_status {value!r}; numeric values must fit UInt8")
             numeric_statuses.add(status)
             continue
         if normalized not in _RESPONSE_STATUS_ALIASES:

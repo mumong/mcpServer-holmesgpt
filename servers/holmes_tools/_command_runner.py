@@ -2,6 +2,7 @@
 通用「命令/脚本」执行层：根据工具名与参数渲染 Jinja2 模板后执行 shell，返回标准输出。
 用于 kubernetes_core、helm 等声明式工具。来源：Holmes mcp/tools/_command_runner。
 """
+
 import os
 import subprocess
 import tempfile
@@ -77,7 +78,13 @@ def run_command(
         if result.returncode != 0:
             logger.warning(
                 "[run_command] 命令失败 (exit %s, %.2fs): %s\n  stdout(%d): %s\n  stderr(%d): %s",
-                result.returncode, elapsed, cmd, len(stdout), stdout[:300], len(stderr), stderr[:300],
+                result.returncode,
+                elapsed,
+                cmd,
+                len(stdout),
+                stdout[:300],
+                len(stderr),
+                stderr[:300],
             )
             return _cap_output(f"Command failed (exit {result.returncode}):\n{cmd}\n{out}")
         logger.info("[run_command] 命令成功 (%.2fs, output=%d chars): %s", elapsed, len(out), cmd[:120])
@@ -126,7 +133,12 @@ def run_script(
         if result.returncode != 0:
             logger.warning(
                 "[run_script] 脚本失败 (exit %s, %.2fs)\n  stdout(%d): %s\n  stderr(%d): %s",
-                result.returncode, elapsed, len(stdout), stdout[:300], len(stderr), stderr[:300],
+                result.returncode,
+                elapsed,
+                len(stdout),
+                stdout[:300],
+                len(stderr),
+                stderr[:300],
             )
             return _cap_output(f"Script failed (exit {result.returncode}):\n{out}")
         logger.info("[run_script] 脚本成功 (%.2fs, output=%d chars)", elapsed, len(out))

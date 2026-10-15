@@ -32,7 +32,11 @@ def run_kubectl(
         )
     except Exception as exc:  # noqa: BLE001 - collectors must degrade gracefully
         return False, "", str(exc)
-    return completed.returncode == 0, _strip_defaulted(completed.stdout or ""), (completed.stderr or "").strip()
+    return (
+        completed.returncode == 0,
+        _strip_defaulted(completed.stdout or ""),
+        (completed.stderr or "").strip(),
+    )
 
 
 def _strip_defaulted(text: str) -> str:

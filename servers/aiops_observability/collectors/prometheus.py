@@ -196,9 +196,11 @@ def collect_prometheus(
     for metric, query in queries.items():
         payload = _query(prometheus_url, query, timeout)
         if payload.get("status") == "success":
-            values = (((payload.get("data") or {}).get("result")) or [])
+            values = ((payload.get("data") or {}).get("result")) or []
             instant_results[metric] = values
-            records.append({"metric": metric, "query": query, "result_count": len(values), "result": values[:10]})
+            records.append(
+                {"metric": metric, "query": query, "result_count": len(values), "result": values[:10]}
+            )
         else:
             errors.append(str(payload.get("error") or payload))
 
@@ -207,7 +209,7 @@ def collect_prometheus(
         range_query = f"container_memory_working_set_bytes{selector}"
         range_payload = _query_range(prometheus_url, range_query, start, end, step_seconds, timeout)
         if range_payload.get("status") == "success":
-            range_results = (((range_payload.get("data") or {}).get("result")) or [])
+            range_results = ((range_payload.get("data") or {}).get("result")) or []
             records.append(
                 {
                     "metric": "container_memory_working_set_bytes_range",

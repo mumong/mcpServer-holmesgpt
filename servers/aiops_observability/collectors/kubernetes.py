@@ -91,11 +91,7 @@ def resolve_owner_chain_with_status(
                 "status": "complete" if chain else "empty",
             }
         owner = next(
-            (
-                item
-                for item in owners
-                if isinstance(item, dict) and item.get("controller") is True
-            ),
+            (item for item in owners if isinstance(item, dict) and item.get("controller") is True),
             owners[0],
         )
         if not isinstance(owner, dict):
@@ -121,10 +117,7 @@ def resolve_owner_chain_with_status(
         if error or nxt is None:
             return chain, {
                 "status": "partial",
-                "error": str(
-                    error
-                    or f"failed to fetch {kind} {namespace}/{name}"
-                ),
+                "error": str(error or f"failed to fetch {kind} {namespace}/{name}"),
             }
         obj = nxt
     remaining = (obj.get("metadata", {}) or {}).get("ownerReferences") or []
@@ -190,7 +183,10 @@ def matching_services_with_status(
                     "uid": (svc.get("metadata", {}) or {}).get("uid"),
                     "selector": selector,
                     "cluster_ip": spec.get("clusterIP"),
-                    "ports": [{"port": p.get("port"), "targetPort": p.get("targetPort")} for p in (spec.get("ports") or [])],
+                    "ports": [
+                        {"port": p.get("port"), "targetPort": p.get("targetPort")}
+                        for p in (spec.get("ports") or [])
+                    ],
                 }
             )
     return result, {"status": "complete" if result else "empty"}
@@ -229,7 +225,9 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
 
     describe_ok, describe = _run_kubectl(["describe", "pod", name, "-n", ns], timeout=timeout)
     events_ok, events = _run_kubectl(["events", "--for", f"pod/{name}", "-n", ns], timeout=timeout)
-    logs_ok, logs = _run_kubectl(["logs", name, "-n", ns, "--all-containers", f"--tail={tail}"], timeout=timeout)
+    logs_ok, logs = _run_kubectl(
+        ["logs", name, "-n", ns, "--all-containers", f"--tail={tail}"], timeout=timeout
+    )
     prev_ok, prev_logs = _run_kubectl(
         ["logs", name, "-n", ns, "--previous", "--all-containers", f"--tail={tail}"],
         timeout=timeout,
@@ -238,7 +236,7 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
     container_statuses = status.get("containerStatuses") or []
     last_terminated = []
     for item in container_statuses:
-        terminated = ((item.get("lastState") or {}).get("terminated") or {})
+        terminated = (item.get("lastState") or {}).get("terminated") or {}
         if terminated:
             last_terminated.append(
                 {
@@ -305,7 +303,9 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
                 evidence_id=evidence_id("k8s", ns, name, "events"),
                 source_system="kubernetes",
                 dimension="k8s",
-                summary=events.splitlines()[-1][:500] if events.splitlines() else "Kubernetes events returned",
+                summary=events.splitlines()[-1][:500]
+                if events.splitlines()
+                else "Kubernetes events returned",
                 severity="warning" if "Warning" in events else "info",
                 confidence="high",
                 directness="direct",
@@ -330,7 +330,9 @@ def collect_kubernetes(namespace: str, pod: str, timeout: int = 30, tail: int = 
                 evidence_id=evidence_id("log", ns, name, "previous"),
                 source_system="kubernetes",
                 dimension="logs",
-                summary=prev_logs.splitlines()[-1][:500] if prev_logs.splitlines() else "previous logs returned",
+                summary=prev_logs.splitlines()[-1][:500]
+                if prev_logs.splitlines()
+                else "previous logs returned",
                 confidence="high",
                 directness="direct",
                 payload={"log_preview": prev_logs[-4000:]},

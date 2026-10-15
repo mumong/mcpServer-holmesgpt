@@ -38,10 +38,7 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         self.assertIsNone(aiops_observability_query.call_tool("unknown", {}))
 
     def test_tool_schemas_match_approved_defaults_and_string_bounds(self):
-        tools = {
-            tool.name: tool.inputSchema
-            for tool in aiops_observability_query.TOOLS
-        }
+        tools = {tool.name: tool.inputSchema for tool in aiops_observability_query.TOOLS}
 
         for schema in tools.values():
             properties = schema["properties"]
@@ -159,13 +156,9 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
                 },
             },
             "facts": facts,
-            "samples": [
-                {"ref": fact["ref"], "message": "sample " + ("y" * 1800)}
-                for fact in facts
-            ],
+            "samples": [{"ref": fact["ref"], "message": "sample " + ("y" * 1800)} for fact in facts],
             "flows": [
-                {"ref": fact["ref"], "request_resource": "/resource/" + ("z" * 1200)}
-                for fact in facts
+                {"ref": fact["ref"], "request_resource": "/resource/" + ("z" * 1200)} for fact in facts
             ],
             "spans": [],
             "correlations": [],
@@ -243,10 +236,7 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
                     "basis": "exact_trace_id",
                 }
             ],
-            "evidence_refs": [
-                fact["ref"]
-                for fact in correlated_facts
-            ],
+            "evidence_refs": [fact["ref"] for fact in correlated_facts],
             "truncated": False,
             "limits": {},
         }
@@ -254,11 +244,7 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         result = json.loads(dump_bounded_result(payload))
 
         retained = result["correlations"][0]["trace_id"]
-        sources = {
-            fact["source_system"]
-            for fact in result["facts"]
-            if fact.get("trace_id") == retained
-        }
+        sources = {fact["source_system"] for fact in result["facts"] if fact.get("trace_id") == retained}
         self.assertEqual(sources, {"deepflow", "tempo"})
 
     def test_oversized_input_is_rejected_before_handler_and_response_is_bounded(self):
@@ -283,12 +269,17 @@ class AutonomousObservabilityContractTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "input_budget_exceeded")
         self.assertFalse(result["query"]["preserved"])
         self.assertFalse(result["query"]["executed"])
-        self.assertEqual(result["query"]["serialized_bytes"], len(json.dumps(
-            arguments,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")))
+        self.assertEqual(
+            result["query"]["serialized_bytes"],
+            len(
+                json.dumps(
+                    arguments,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ),
+        )
         handler.assert_not_called()
 
     def test_lossless_serialization_preserves_large_query_metadata(self):

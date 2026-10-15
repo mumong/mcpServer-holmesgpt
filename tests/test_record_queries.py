@@ -1,4 +1,5 @@
 """Additive lifecycle API and generic record operations, including MCP JSON arguments."""
+
 import asyncio
 import copy
 import json
@@ -16,22 +17,50 @@ from holmes_tools.record_query import select_records, validate_query
 
 
 def fixture():
-    return {"kind": "PodList", "metadata": {"resourceVersion": "v1", "continue": "next", "remainingItemCount": 7},
-            "items": [{"metadata": {"namespace": "test", "name": "p", "uid": "u"},
-                       "spec": {"nodeName": "n", "containers": [{"name": "app"}, {"name": "sidecar"}]},
-                       "status": {"phase": "Running", "containerStatuses": [
-                           {"name": "app", "ready": True, "restartCount": 7,
-                            "state": {"running": {}}, "lastState": {"terminated": {
-                                "reason": "OOMKilled", "exitCode": 137, "finishedAt": "2026-10-09T00:09:00Z"}}},
-                           {"name": "sidecar", "ready": False, "restartCount": 0,
-                            "state": {"waiting": {}}, "lastState": {}},
-                       ]}}]}
+    return {
+        "kind": "PodList",
+        "metadata": {"resourceVersion": "v1", "continue": "next", "remainingItemCount": 7},
+        "items": [
+            {
+                "metadata": {"namespace": "test", "name": "p", "uid": "u"},
+                "spec": {"nodeName": "n", "containers": [{"name": "app"}, {"name": "sidecar"}]},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {
+                            "name": "app",
+                            "ready": True,
+                            "restartCount": 7,
+                            "state": {"running": {}},
+                            "lastState": {
+                                "terminated": {
+                                    "reason": "OOMKilled",
+                                    "exitCode": 137,
+                                    "finishedAt": "2026-10-09T00:09:00Z",
+                                }
+                            },
+                        },
+                        {
+                            "name": "sidecar",
+                            "ready": False,
+                            "restartCount": 0,
+                            "state": {"waiting": {}},
+                            "lastState": {},
+                        },
+                    ],
+                },
+            }
+        ],
+    }
 
 
 class RecordQueryTests(unittest.TestCase):
     def call(self, args, payload=None):
-        with patch.object(pod_lifecycle.subprocess, "run", return_value=SimpleNamespace(
-                returncode=0, stdout=json.dumps(payload or fixture()), stderr="")):
+        with patch.object(
+            pod_lifecycle.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=0, stdout=json.dumps(payload or fixture()), stderr=""),
+        ):
             return json.loads(pod_lifecycle.query(args))
 
     def test_old_call_still_full_lifecycle(self):
@@ -49,9 +78,13 @@ class RecordQueryTests(unittest.TestCase):
         self.assertEqual(result["source_metadata"]["remaining_item_count"], 7)
 
     def test_filter_same_container_preserves_recovered_facts(self):
-        args = {"record_type": "container", "where": [
-            {"field": "last_termination_reason", "op": "eq", "value": "OOMKilled"},
-            {"field": "ready", "op": "eq", "value": True}]}
+        args = {
+            "record_type": "container",
+            "where": [
+                {"field": "last_termination_reason", "op": "eq", "value": "OOMKilled"},
+                {"field": "ready", "op": "eq", "value": True},
+            ],
+        }
         result = self.call(args)
         self.assertEqual(result["matched_rows"], 1)
         self.assertEqual(result["rows"][0]["container"], "app")
@@ -65,21 +98,32 @@ class RecordQueryTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
 
     def test_mcp_entry_preserves_lists_and_nested_null(self):
-        args = {"record_type": "container", "fields": ["ready"],
-                "where": [{"field": "last_termination_reason", "op": "ne", "value": None}]}
+        args = {
+            "record_type": "container",
+            "fields": ["ready"],
+            "where": [{"field": "last_termination_reason", "op": "ne", "value": None}],
+        }
         original = copy.deepcopy(args)
-        with patch.object(k8s_core_server.kubernetes_core, "call_tool", return_value="ok") as call, \
-                patch.object(k8s_core_server, "log_tool_call"), patch.object(k8s_core_server, "log_tool_result"):
+        with (
+            patch.object(k8s_core_server.kubernetes_core, "call_tool", return_value="ok") as call,
+            patch.object(k8s_core_server, "log_tool_call"),
+            patch.object(k8s_core_server, "log_tool_result"),
+        ):
             asyncio.run(k8s_core_server.call_tool("query_pod_lifecycle", args))
             call.assert_called_once_with("query_pod_lifecycle", args)
             self.assertEqual(args, original)
 
     def test_invalid_query_fails_before_collection(self):
-        invalid = [{"fields": []}, {"where": "bad"}, {"fields": ["nonexistent"]},
-                   {"group_by": "state"}, {"record_type": "other"},
-                   {"where": [{"field": "node", "op": "gt", "value": "x"}]},
-                   {"where": [{"field": "node", "op": "eq", "value": float("nan")}]},
-                   {"match": "xor"}]
+        invalid = [
+            {"fields": []},
+            {"where": "bad"},
+            {"fields": ["nonexistent"]},
+            {"group_by": "state"},
+            {"record_type": "other"},
+            {"where": [{"field": "node", "op": "gt", "value": "x"}]},
+            {"where": [{"field": "node", "op": "eq", "value": float("nan")}]},
+            {"match": "xor"},
+        ]
         for args in invalid:
             with self.subTest(args=args), patch.object(pod_lifecycle.subprocess, "run") as run:
                 result = json.loads(pod_lifecycle.query(args))
@@ -96,8 +140,11 @@ class RecordQueryTests(unittest.TestCase):
     def test_empty_and_source_error_not_conflated(self):
         empty = {"kind": "PodList", "items": [], "metadata": {}}
         self.assertEqual(self.call({"group_by": "node"}, empty)["groups"], [])
-        with patch.object(pod_lifecycle.subprocess, "run", return_value=SimpleNamespace(
-                returncode=1, stdout="", stderr="denied")):
+        with patch.object(
+            pod_lifecycle.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="denied"),
+        ):
             result = json.loads(pod_lifecycle.query({"record_type": "pod"}))
         self.assertEqual(result["status"], "error")
         self.assertNotIn("matched_rows", result)
@@ -110,12 +157,19 @@ class RecordQueryTests(unittest.TestCase):
         self.assertNotIn("rows", result)
 
     def test_generic_numeric_zero_false_null_and_late_match(self):
-        rows = [{"id": i, "value": i} for i in range(100)] + [{"id": 100, "value": None}, {"id": 101, "value": False}]
-        query = validate_query({"where": [{"field": "value", "op": "eq", "value": 0}]}, ["id", "value"], ["id", "value"])
+        rows = [{"id": i, "value": i} for i in range(100)] + [
+            {"id": 100, "value": None},
+            {"id": 101, "value": False},
+        ]
+        query = validate_query(
+            {"where": [{"field": "value", "op": "eq", "value": 0}]}, ["id", "value"], ["id", "value"]
+        )
         result = select_records(rows, query)
         self.assertEqual(result["rows"], [{"id": 0, "value": 0}])
         self.assertEqual(result["unknown_filter_rows"], 1)
-        query = validate_query({"where": [{"field": "id", "op": "gte", "value": 99}]}, ["id", "value"], ["id", "value"])
+        query = validate_query(
+            {"where": [{"field": "id", "op": "gte", "value": 99}]}, ["id", "value"], ["id", "value"]
+        )
         self.assertEqual(len(select_records(rows, query)["rows"]), 3)
 
     def test_all_container_roles_keep_identity(self):

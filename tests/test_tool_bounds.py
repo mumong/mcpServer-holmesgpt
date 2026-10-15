@@ -15,8 +15,11 @@ from holmes_tools.arg_utils import clamp_timeout
 class ToolBoundsTests(unittest.TestCase):
     def run_command(self, stdout, env):
         done = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
-        with patch.dict(os.environ, env), patch.object(_command_runner.subprocess, "run", return_value=done), \
-                patch.object(_command_runner, "_render", return_value="echo 1"):
+        with (
+            patch.dict(os.environ, env),
+            patch.object(_command_runner.subprocess, "run", return_value=done),
+            patch.object(_command_runner, "_render", return_value="echo 1"),
+        ):
             return _command_runner.run_command("echo {{ x }}", {"x": "1"})
 
     def test_default_output_cap_keeps_normal_output(self):

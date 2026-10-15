@@ -35,31 +35,29 @@ server = Server("helm-mcp-server")
 def run_helm_command(args: List[str], timeout: int = 120) -> Dict[str, Any]:
     """
     执行 helm 命令并返回结果
-    
+
     Args:
         args: helm 命令参数列表
         timeout: 超时时间（秒），安装/升级可能较慢
-    
+
     Returns:
         包含 success, data/error 的字典
     """
     if not shutil.which("helm"):
         return {"success": False, "error": "helm 命令未找到，请确保已安装 helm"}
-    
+
     try:
         cmd = ["helm"] + args
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
         if result.returncode == 0:
             return {"success": True, "data": result.stdout.strip()}
         else:
-            return {"success": False, "error": result.stderr.strip() or result.stdout.strip() or "命令执行失败"}
-    
+            return {
+                "success": False,
+                "error": result.stderr.strip() or result.stdout.strip() or "命令执行失败",
+            }
+
     except subprocess.TimeoutExpired:
         return {"success": False, "error": f"命令执行超时 ({timeout}秒)"}
     except Exception as e:
@@ -142,6 +140,7 @@ def _search_repo(arguments: Dict[str, Any]) -> List[TextContent]:
 
 def _mutation(verb: str, required, positional, options, with_set_values: bool):
     """写操作（install/uninstall/upgrade/rollback）：参数校验 → 拼装 argv → 统一结果文本。"""
+
     def handler(arguments: Dict[str, Any]) -> List[TextContent]:
         error = _missing(arguments, *required)
         if error:
@@ -155,55 +154,75 @@ def _mutation(verb: str, required, positional, options, with_set_values: bool):
         if result["success"]:
             return _text(f"✅ {verb}成功\n\n{result['data']}")
         return _text(f"❌ {verb}失败: {result['error']}")
+
     return handler
 
 
 def _release_read(argv):
     """helm/core 只读工具：release_name + namespace 必填，原样返回 helm 输出。"""
+
     def handler(arguments: Dict[str, Any]) -> List[TextContent]:
         error = _missing(arguments, "release_name", "namespace")
         if error:
             return error
         return _plain(run_helm_command(argv(arguments["release_name"], arguments["namespace"])))
+
     return handler
 
 
 # helm/core 只读工具（与 Holmes helm/core 一致）：name -> (description, argv)
 _RELEASE_READ_TOOLS = {
-    "helm_values": ("Get Helm release values as JSON for any released helm chart.",
-                    lambda r, ns: ["get", "values", "-a", r, "-n", ns, "-o", "json"]),
+    "helm_values": (
+        "Get Helm release values as JSON for any released helm chart.",
+        lambda r, ns: ["get", "values", "-a", r, "-n", ns, "-o", "json"],
+    ),
     "helm_status": ("Check the status of a Helm release.", lambda r, ns: ["status", r, "-n", ns]),
     "helm_history": ("Get the revision history of a Helm release.", lambda r, ns: ["history", r, "-n", ns]),
-    "helm_manifest": ("Fetch the generated Kubernetes manifest for a Helm release.",
-                      lambda r, ns: ["get", "manifest", r, "-n", ns]),
+    "helm_manifest": (
+        "Fetch the generated Kubernetes manifest for a Helm release.",
+        lambda r, ns: ["get", "manifest", r, "-n", ns],
+    ),
     "helm_hooks": ("Get the hooks for a Helm release.", lambda r, ns: ["get", "hooks", r, "-n", ns]),
-    "helm_chart": ("Show the chart used to create a Helm release.", lambda r, ns: ["get", "chart", r, "-n", ns]),
+    "helm_chart": (
+        "Show the chart used to create a Helm release.",
+        lambda r, ns: ["get", "chart", r, "-n", ns],
+    ),
     "helm_notes": ("Show the notes provided by the Helm chart.", lambda r, ns: ["get", "notes", r, "-n", ns]),
 }
 
 _HANDLERS = {
     "helm_list_releases": _list_releases,
     "helm_install": _mutation(
-        "安装", ("release_name", "chart"),
+        "安装",
+        ("release_name", "chart"),
         lambda a: ["install", a["release_name"], a["chart"]],
         [_NAMESPACE, ("create_namespace", "--create-namespace", False), _VERSION, _WAIT, _DRY_RUN],
         with_set_values=True,
     ),
     "helm_uninstall": _mutation(
-        "卸载", ("release_name",),
+        "卸载",
+        ("release_name",),
         lambda a: ["uninstall", a["release_name"]],
         [_NAMESPACE, ("keep_history", "--keep-history", False), _DRY_RUN],
         with_set_values=False,
     ),
     "helm_upgrade": _mutation(
-        "升级", ("release_name", "chart"),
+        "升级",
+        ("release_name", "chart"),
         lambda a: ["upgrade", a["release_name"], a["chart"]],
-        [_NAMESPACE, _VERSION, ("reuse_values", "--reuse-values", False),
-         ("reset_values", "--reset-values", False), _WAIT, _DRY_RUN],
+        [
+            _NAMESPACE,
+            _VERSION,
+            ("reuse_values", "--reuse-values", False),
+            ("reset_values", "--reset-values", False),
+            _WAIT,
+            _DRY_RUN,
+        ],
         with_set_values=True,
     ),
     "helm_rollback": _mutation(
-        "回滚", ("release_name",),
+        "回滚",
+        ("release_name",),
         # 如果指定了版本号，添加到参数中
         lambda a: ["rollback", a["release_name"]] + ([str(a["revision"])] if a.get("revision") else []),
         [_NAMESPACE, _WAIT, _DRY_RUN],
@@ -227,20 +246,16 @@ TOOLS: List[Tool] = [
             "properties": {
                 "namespace": {
                     "type": "string",
-                    "description": "指定命名空间（可选，不填则使用当前上下文的命名空间）"
+                    "description": "指定命名空间（可选，不填则使用当前上下文的命名空间）",
                 },
                 "all_namespaces": {
                     "type": "boolean",
-                    "description": "是否列出所有命名空间的 releases（默认: false）"
+                    "description": "是否列出所有命名空间的 releases（默认: false）",
                 },
-                "filter": {
-                    "type": "string",
-                    "description": "按 release 名称过滤（支持正则表达式）"
-                }
-            }
-        }
+                "filter": {"type": "string", "description": "按 release 名称过滤（支持正则表达式）"},
+            },
+        },
     ),
-    
     # ============================================================
     # helm_install - 安装 chart
     # ============================================================
@@ -250,43 +265,24 @@ TOOLS: List[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "release_name": {
-                    "type": "string",
-                    "description": "Release 名称"
-                },
-                "chart": {
-                    "type": "string",
-                    "description": "Chart 名称（如 bitnami/nginx）或本地路径"
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "目标命名空间（可选）"
-                },
+                "release_name": {"type": "string", "description": "Release 名称"},
+                "chart": {"type": "string", "description": "Chart 名称（如 bitnami/nginx）或本地路径"},
+                "namespace": {"type": "string", "description": "目标命名空间（可选）"},
                 "create_namespace": {
                     "type": "boolean",
-                    "description": "如果命名空间不存在，是否自动创建（默认: false）"
+                    "description": "如果命名空间不存在，是否自动创建（默认: false）",
                 },
-                "version": {
-                    "type": "string",
-                    "description": "指定 chart 版本（可选）"
-                },
+                "version": {"type": "string", "description": "指定 chart 版本（可选）"},
                 "set_values": {
                     "type": "object",
-                    "description": "要设置的 values（key-value 对象，如 {\"replicaCount\": 2}）"
+                    "description": '要设置的 values（key-value 对象，如 {"replicaCount": 2}）',
                 },
-                "wait": {
-                    "type": "boolean",
-                    "description": "是否等待所有资源就绪（默认: false）"
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "是否只模拟安装，不实际执行（默认: false）"
-                }
+                "wait": {"type": "boolean", "description": "是否等待所有资源就绪（默认: false）"},
+                "dry_run": {"type": "boolean", "description": "是否只模拟安装，不实际执行（默认: false）"},
             },
-            "required": ["release_name", "chart"]
-        }
+            "required": ["release_name", "chart"],
+        },
     ),
-    
     # ============================================================
     # helm_uninstall - 卸载 release
     # ============================================================
@@ -296,27 +292,17 @@ TOOLS: List[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "release_name": {
-                    "type": "string",
-                    "description": "要卸载的 Release 名称"
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Release 所在的命名空间（可选）"
-                },
+                "release_name": {"type": "string", "description": "要卸载的 Release 名称"},
+                "namespace": {"type": "string", "description": "Release 所在的命名空间（可选）"},
                 "keep_history": {
                     "type": "boolean",
-                    "description": "是否保留 release 历史记录（默认: false）"
+                    "description": "是否保留 release 历史记录（默认: false）",
                 },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "是否只模拟卸载，不实际执行（默认: false）"
-                }
+                "dry_run": {"type": "boolean", "description": "是否只模拟卸载，不实际执行（默认: false）"},
             },
-            "required": ["release_name"]
-        }
+            "required": ["release_name"],
+        },
     ),
-    
     # ============================================================
     # helm_upgrade - 升级 release
     # ============================================================
@@ -326,47 +312,25 @@ TOOLS: List[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "release_name": {
-                    "type": "string",
-                    "description": "Release 名称"
-                },
-                "chart": {
-                    "type": "string",
-                    "description": "Chart 名称（如 bitnami/nginx）或本地路径"
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Release 所在的命名空间（可选）"
-                },
-                "version": {
-                    "type": "string",
-                    "description": "指定 chart 版本（可选）"
-                },
-                "set_values": {
-                    "type": "object",
-                    "description": "要设置的 values（key-value 对象）"
-                },
+                "release_name": {"type": "string", "description": "Release 名称"},
+                "chart": {"type": "string", "description": "Chart 名称（如 bitnami/nginx）或本地路径"},
+                "namespace": {"type": "string", "description": "Release 所在的命名空间（可选）"},
+                "version": {"type": "string", "description": "指定 chart 版本（可选）"},
+                "set_values": {"type": "object", "description": "要设置的 values（key-value 对象）"},
                 "reuse_values": {
                     "type": "boolean",
-                    "description": "是否复用上次安装的 values（默认: false）"
+                    "description": "是否复用上次安装的 values（默认: false）",
                 },
                 "reset_values": {
                     "type": "boolean",
-                    "description": "是否重置为 chart 默认 values（默认: false）"
+                    "description": "是否重置为 chart 默认 values（默认: false）",
                 },
-                "wait": {
-                    "type": "boolean",
-                    "description": "是否等待所有资源就绪（默认: false）"
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "是否只模拟升级，不实际执行（默认: false）"
-                }
+                "wait": {"type": "boolean", "description": "是否等待所有资源就绪（默认: false）"},
+                "dry_run": {"type": "boolean", "description": "是否只模拟升级，不实际执行（默认: false）"},
             },
-            "required": ["release_name", "chart"]
-        }
+            "required": ["release_name", "chart"],
+        },
     ),
-    
     # ============================================================
     # helm_rollback - 回滚 release
     # ============================================================
@@ -376,31 +340,18 @@ TOOLS: List[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "release_name": {
-                    "type": "string",
-                    "description": "Release 名称"
-                },
+                "release_name": {"type": "string", "description": "Release 名称"},
                 "revision": {
                     "type": "integer",
-                    "description": "要回滚到的版本号（可选，不填则回滚到上一个版本）"
+                    "description": "要回滚到的版本号（可选，不填则回滚到上一个版本）",
                 },
-                "namespace": {
-                    "type": "string",
-                    "description": "Release 所在的命名空间（可选）"
-                },
-                "wait": {
-                    "type": "boolean",
-                    "description": "是否等待所有资源就绪（默认: false）"
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "是否只模拟回滚，不实际执行（默认: false）"
-                }
+                "namespace": {"type": "string", "description": "Release 所在的命名空间（可选）"},
+                "wait": {"type": "boolean", "description": "是否等待所有资源就绪（默认: false）"},
+                "dry_run": {"type": "boolean", "description": "是否只模拟回滚，不实际执行（默认: false）"},
             },
-            "required": ["release_name"]
-        }
+            "required": ["release_name"],
+        },
     ),
-    
     # ============================================================
     # helm_search_repo - 搜索仓库获取 chart 信息
     # ============================================================
@@ -410,17 +361,11 @@ TOOLS: List[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "keyword": {
-                    "type": "string",
-                    "description": "搜索关键词（chart 名称或部分名称）"
-                },
-                "versions": {
-                    "type": "boolean",
-                    "description": "是否显示所有可用版本（默认只显示最新版本）"
-                }
+                "keyword": {"type": "string", "description": "搜索关键词（chart 名称或部分名称）"},
+                "versions": {"type": "boolean", "description": "是否显示所有可用版本（默认只显示最新版本）"},
             },
-            "required": ["keyword"]
-        }
+            "required": ["keyword"],
+        },
     ),
     # ============================================================
     # helm/core 只读工具（与 Holmes helm/core 一致）
@@ -428,7 +373,7 @@ TOOLS: List[Tool] = [
     Tool(
         name="helm_list",
         description="List all current Helm releases (all namespaces). Use to get all helm releases.",
-        inputSchema={"type": "object", "properties": {}}
+        inputSchema={"type": "object", "properties": {}},
     ),
 ] + [
     Tool(
@@ -438,10 +383,10 @@ TOOLS: List[Tool] = [
             "type": "object",
             "properties": {
                 "release_name": {"type": "string", "description": "Release 名称"},
-                "namespace": {"type": "string", "description": "命名空间"}
+                "namespace": {"type": "string", "description": "命名空间"},
             },
-            "required": ["release_name", "namespace"]
-        }
+            "required": ["release_name", "namespace"],
+        },
     )
     for name, (description, _) in _RELEASE_READ_TOOLS.items()
 ]

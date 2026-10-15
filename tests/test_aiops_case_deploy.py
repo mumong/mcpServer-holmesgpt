@@ -51,7 +51,9 @@ class AiopsCaseDeployTests(unittest.TestCase):
         volumes = {item["name"]: item for item in pod_spec["volumes"]}
         self.assertNotIn("aiops-data", volumes)
         self.assertIn("aiops-cases", volumes)
-        self.assertEqual(volumes["aiops-cases"]["hostPath"]["path"], "/root/huhu/agent/combine-aiops-mcp/aiops-cases")
+        self.assertEqual(
+            volumes["aiops-cases"]["hostPath"]["path"], "/root/huhu/agent/combine-aiops-mcp/aiops-cases"
+        )
         self.assertEqual(volumes["aiops-cases"]["hostPath"]["type"], "DirectoryOrCreate")
 
     def test_aiops_case_deploy_env_has_no_data_dependency_and_fine_server_exists(self):
@@ -76,9 +78,9 @@ class AiopsCaseDeployTests(unittest.TestCase):
 
         deployment_ports = {
             item["name"]: item["containerPort"]
-            for item in yaml.safe_load(
-                Path("deploy/deployment.yaml").read_text(encoding="utf-8")
-            )["spec"]["template"]["spec"]["containers"][0]["ports"]
+            for item in yaml.safe_load(Path("deploy/deployment.yaml").read_text(encoding="utf-8"))["spec"][
+                "template"
+            ]["spec"]["containers"][0]["ports"]
         }
         self.assertEqual(deployment_ports["aiops-query"], 8100)
 

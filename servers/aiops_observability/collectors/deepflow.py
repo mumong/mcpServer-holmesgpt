@@ -136,10 +136,14 @@ def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dic
             return None
     if not cfg.clickhouse_exec_enabled:
         return None
-    ch_pod = cfg.clickhouse_exec_pod or _kube.find_pod(cfg.clickhouse_exec_namespace, cfg.clickhouse_exec_selector)
+    ch_pod = cfg.clickhouse_exec_pod or _kube.find_pod(
+        cfg.clickhouse_exec_namespace, cfg.clickhouse_exec_selector
+    )
     if not ch_pod:
         return None
-    ok, out, _ = _kube.exec_in_pod(cfg.clickhouse_exec_namespace, ch_pod, ["clickhouse-client", "--query", sql], timeout=timeout)
+    ok, out, _ = _kube.exec_in_pod(
+        cfg.clickhouse_exec_namespace, ch_pod, ["clickhouse-client", "--query", sql], timeout=timeout
+    )
     if not ok or not out.strip():
         return None
     try:
@@ -148,7 +152,9 @@ def _run_clickhouse_json(cfg: Any, database: str, sql: str, timeout: int) -> dic
         return None
 
 
-def fetch_call_chains(cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int, max_chains: int = 5) -> list[dict[str, Any]]:
+def fetch_call_chains(
+    cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int, max_chains: int = 5
+) -> list[dict[str, Any]]:
     """定向抓该 Pod 的 eBPF 多跳调用链（syscall_trace_id 关联，无需 app 插桩）。
     先找出有 >=2 跳的 syscall_trace_id，再取回它们的完整链路。"""
     db = _safe_identifier(database or "flow_log")
@@ -178,20 +184,30 @@ def fetch_call_chains(cfg: Any, database: str, pod_ip: str, start: str, end: str
         by_stid.setdefault(str(r.get("stid")), []).append(r)
     chains = []
     for stid, hops in by_stid.items():
-        chains.append({
-            "syscall_trace_id": stid,
-            "hop_count": len(hops),
-            "hops": [
-                {"src": h.get("src"), "dst": h.get("dst"), "proto": h.get("proto"),
-                 "endpoint": str(h.get("endpoint") or "")[:120], "code": h.get("code"), "duration_us": h.get("dur")}
-                for h in hops[:8]
-            ],
-        })
+        chains.append(
+            {
+                "syscall_trace_id": stid,
+                "hop_count": len(hops),
+                "hops": [
+                    {
+                        "src": h.get("src"),
+                        "dst": h.get("dst"),
+                        "proto": h.get("proto"),
+                        "endpoint": str(h.get("endpoint") or "")[:120],
+                        "code": h.get("code"),
+                        "duration_us": h.get("dur"),
+                    }
+                    for h in hops[:8]
+                ],
+            }
+        )
     chains.sort(key=lambda c: -c["hop_count"])
     return chains[:max_chains]
 
 
-def discover_correlation(cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int) -> dict[str, list[str]]:
+def discover_correlation(
+    cfg: Any, database: str, pod_ip: str, start: str, end: str, timeout: int
+) -> dict[str, list[str]]:
     """Discover distinct trace_ids (for Tempo lookup) and caller IPs (who called
     this pod = request drivers) for the target Pod IP within the window.
 
@@ -225,7 +241,18 @@ def discover_correlation(cfg: Any, database: str, pod_ip: str, start: str, end: 
     return {"trace_ids": trace_ids, "caller_ips": caller_ips}
 
 
-def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_ip: str, node: str | None, sql: str, database: str, source_desc: str, max_records: int, _fetched_chains: list[dict[str, Any]] | None = None) -> SourceResult:
+def _result_from_rows(
+    rows: list[dict[str, Any]],
+    namespace: str,
+    pod: str,
+    pod_ip: str,
+    node: str | None,
+    sql: str,
+    database: str,
+    source_desc: str,
+    max_records: int,
+    _fetched_chains: list[dict[str, Any]] | None = None,
+) -> SourceResult:
     coverage = "present" if rows else "empty"
     evidence = []
     if rows:
@@ -264,7 +291,11 @@ def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_
                     summary=f"eBPF 自动追踪拼出 {len(call_chains)} 条调用链（无需 app 插桩）；最长链 {top['hop_count']} 跳：{hop_desc}",
                     confidence="high" if has_syscall else "medium",
                     directness="direct",
-                    trace_correlation={"auto_traced": True, "call_chains": call_chains, "app_trace_ids": app_trace_ids[:5]},
+                    trace_correlation={
+                        "auto_traced": True,
+                        "call_chains": call_chains,
+                        "app_trace_ids": app_trace_ids[:5],
+                    },
                     payload={"call_chains": call_chains},
                 )
             )
@@ -279,11 +310,26 @@ def _result_from_rows(rows: list[dict[str, Any]], namespace: str, pod: str, pod_
     )
 
 
-def _collect_via_exec(cfg: Any, database: str, namespace: str, pod: str, pod_ip: str, node: str | None, start: str, end: str, timeout: int, max_records: int) -> SourceResult:
-    ch_pod = cfg.clickhouse_exec_pod or _kube.find_pod(cfg.clickhouse_exec_namespace, cfg.clickhouse_exec_selector)
+def _collect_via_exec(
+    cfg: Any,
+    database: str,
+    namespace: str,
+    pod: str,
+    pod_ip: str,
+    node: str | None,
+    start: str,
+    end: str,
+    timeout: int,
+    max_records: int,
+) -> SourceResult:
+    ch_pod = cfg.clickhouse_exec_pod or _kube.find_pod(
+        cfg.clickhouse_exec_namespace, cfg.clickhouse_exec_selector
+    )
     if not ch_pod:
         return SourceResult(
-            "deepflow", "tracing", "absent",
+            "deepflow",
+            "tracing",
+            "absent",
             error=f"未找到 ClickHouse Pod（ns={cfg.clickhouse_exec_namespace} selector={cfg.clickhouse_exec_selector}）",
         )
     sql = _build_sql(database, pod_ip, start, end, max_records)
@@ -292,25 +338,48 @@ def _collect_via_exec(cfg: Any, database: str, namespace: str, pod: str, pod_ip:
     )
     if not ok:
         return SourceResult(
-            "deepflow", "tracing", "error",
+            "deepflow",
+            "tracing",
+            "error",
             error=f"kubectl exec 查询 ClickHouse 失败（pod={ch_pod}）: {err or out}",
-            query_meta={"sql": sql, "pod_ip": pod_ip, "node": node, "database": database, "source": "kubectl_exec"},
+            query_meta={
+                "sql": sql,
+                "pod_ip": pod_ip,
+                "node": node,
+                "database": database,
+                "source": "kubectl_exec",
+            },
         )
     try:
         payload = json.loads(out) if out.strip() else {"data": []}
     except json.JSONDecodeError as exc:
         return SourceResult(
-            "deepflow", "tracing", "error",
+            "deepflow",
+            "tracing",
+            "error",
             error=f"ClickHouse 返回非法 JSON: {exc}",
             query_meta={"sql": sql, "source": "kubectl_exec", "raw_preview": out[:300]},
         )
     rows = payload.get("data") if isinstance(payload, dict) else []
     rows = rows if isinstance(rows, list) else []
     chains = fetch_call_chains(cfg, database, pod_ip, start, end, timeout) if rows else []
-    return _result_from_rows(rows, namespace, pod, pod_ip, node, sql, database, f"kubectl exec {ch_pod}", max_records, chains)
+    return _result_from_rows(
+        rows, namespace, pod, pod_ip, node, sql, database, f"kubectl exec {ch_pod}", max_records, chains
+    )
 
 
-def _collect_via_http(clickhouse_url: str, database: str, namespace: str, pod: str, pod_ip: str, node: str | None, start: str, end: str, timeout: int, max_records: int) -> SourceResult:
+def _collect_via_http(
+    clickhouse_url: str,
+    database: str,
+    namespace: str,
+    pod: str,
+    pod_ip: str,
+    node: str | None,
+    start: str,
+    end: str,
+    timeout: int,
+    max_records: int,
+) -> SourceResult:
     if requests is None:
         return SourceResult("deepflow", "tracing", "error", error="requests is not installed")
     sql = _build_sql(database, pod_ip, start, end, max_records)
@@ -320,14 +389,24 @@ def _collect_via_http(clickhouse_url: str, database: str, namespace: str, pod: s
         payload = response.json()
     except Exception as exc:  # noqa: BLE001
         return SourceResult(
-            "deepflow", "tracing", "error",
+            "deepflow",
+            "tracing",
+            "error",
             error=str(exc),
-            query_meta={"sql": sql, "pod_ip": pod_ip, "node": node, "database": database, "source": "direct_url"},
+            query_meta={
+                "sql": sql,
+                "pod_ip": pod_ip,
+                "node": node,
+                "database": database,
+                "source": "direct_url",
+            },
         )
     rows = payload.get("data") if isinstance(payload, dict) else []
     rows = rows if isinstance(rows, list) else []
     chains = fetch_call_chains(get_config(), database, pod_ip, start, end, timeout) if rows else []
-    return _result_from_rows(rows, namespace, pod, pod_ip, node, sql, database, "direct clickhouse http", max_records, chains)
+    return _result_from_rows(
+        rows, namespace, pod, pod_ip, node, sql, database, "direct clickhouse http", max_records, chains
+    )
 
 
 def collect_deepflow(
@@ -349,12 +428,18 @@ def collect_deepflow(
         return SourceResult("deepflow", "tracing", "empty", error="pod_ip 为空，无法关联 DeepFlow flow")
     # 1. Explicit direct URL wins.
     if clickhouse_url:
-        return _collect_via_http(clickhouse_url, database, namespace, pod, pod_ip, node, start, end, timeout, max_records)
+        return _collect_via_http(
+            clickhouse_url, database, namespace, pod, pod_ip, node, start, end, timeout, max_records
+        )
     # 2. kubectl-exec mode (default).
     if cfg.clickhouse_exec_enabled:
-        return _collect_via_exec(cfg, database, namespace, pod, pod_ip, node, start, end, timeout, max_records)
+        return _collect_via_exec(
+            cfg, database, namespace, pod, pod_ip, node, start, end, timeout, max_records
+        )
     # 3. Honestly absent.
     return SourceResult(
-        "deepflow", "tracing", "absent",
+        "deepflow",
+        "tracing",
+        "absent",
         error="DEEPFLOW_CLICKHOUSE_URL 未配置且 kubectl-exec 模式已禁用",
     )

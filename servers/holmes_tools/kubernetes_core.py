@@ -7,6 +7,7 @@ kubectl_container_logs, kubectl_container_previous_logs, kubectl_logs_grep, kube
 kubectl_top_pods, kubectl_top_nodes, get_prometheus_target, kubectl_lineage_children, kubectl_lineage_parents。
 依赖：kubectl、jq（部分工具）、jinja2。
 """
+
 from typing import Any, Dict, List, Optional
 
 from mcp.types import Tool
@@ -199,7 +200,11 @@ TOOLS: List[Tool] = [
         description="Retrieve events for a resource. resource_type: pod, service, deployment, etc.",
         inputSchema=_input_schema(
             ["resource_type", "resource_name"],
-            {"resource_type": {"type": "string"}, "resource_name": {"type": "string"}, "namespace": {"type": "string"}},
+            {
+                "resource_type": {"type": "string"},
+                "resource_name": {"type": "string"},
+                "namespace": {"type": "string"},
+            },
         ),
     ),
     Tool(

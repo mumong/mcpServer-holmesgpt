@@ -170,8 +170,13 @@ def _execute_command(cmd: str | list[str], timeout: int, *, shell: bool) -> dict
             timeout=timeout,
         )
         elapsed = time.monotonic() - t0
-        log_command(log_cmd, returncode=result.returncode,
-                    stdout=result.stdout or "", stderr=result.stderr or "", elapsed=elapsed)
+        log_command(
+            log_cmd,
+            returncode=result.returncode,
+            stdout=result.stdout or "",
+            stderr=result.stderr or "",
+            elapsed=elapsed,
+        )
         return {
             "success": result.returncode == 0,
             "stdout": result.stdout or "",
@@ -202,7 +207,7 @@ def validate_image_and_commands(image: str, command_list: list) -> Tuple[bool, s
     """校验镜像名和命令列表。通过 (True, "")，不通过 (False, 原因)。"""
     if not image or not IMAGE_RE.match(image.strip()):
         return False, "镜像名不合法"
-    for c in (command_list or []):
+    for c in command_list or []:
         if not isinstance(c, str):
             return False, "命令列表中的元素必须为字符串"
     return True, ""
@@ -264,7 +269,7 @@ async def list_tools():
                     "command": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "要执行的命令列表，如 [\"sh\", \"-c\", \"echo hello\"]；不填则用镜像默认 entrypoint",
+                        "description": '要执行的命令列表，如 ["sh", "-c", "echo hello"]；不填则用镜像默认 entrypoint',
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -311,7 +316,9 @@ async def call_tool(name: str, arguments: dict):
             return _rejected("kubectl 未找到")
 
         cmd_parts = [
-            "kubectl", "run", pod_name,
+            "kubectl",
+            "run",
+            pod_name,
             f"--image={image}",
             f"--namespace={namespace}",
             "--rm",

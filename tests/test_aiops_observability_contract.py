@@ -110,7 +110,9 @@ class NoDataDependencyTests(unittest.TestCase):
         fake = {"ok": True, "case_id": "auto-x", "runtime_status": {"data_dependency": False}}
         with patch.object(aiops_case, "collect_case", return_value=fake):
             payload = json.loads(
-                aiops_case.call_tool("collect_aiops_case", {"namespace": "ns", "pod": "p", "scenario": "auto"})
+                aiops_case.call_tool(
+                    "collect_aiops_case", {"namespace": "ns", "pod": "p", "scenario": "auto"}
+                )
             )
         self.assertFalse(payload["runtime_status"]["data_dependency"])
 

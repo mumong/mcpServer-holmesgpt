@@ -150,7 +150,8 @@ def canonical_query_case_id(
         facts = result.get("facts")
         evidence_refs = [
             str(fact.get("ref") or "").strip()
-            for fact in facts if isinstance(facts, list)
+            for fact in facts
+            if isinstance(facts, list)
             if isinstance(fact, dict)
             and str(fact.get("ref") or "").strip()
             and str(fact.get("source_system") or "").strip()
@@ -161,9 +162,7 @@ def canonical_query_case_id(
         "source_system": str(source_system or "").strip(),
         "evidence_refs": sorted(set(evidence_refs or [])),
     }
-    return "query-" + hashlib.sha256(
-        _canonical_json(value).encode("utf-8")
-    ).hexdigest()[:12]
+    return "query-" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()[:12]
 
 
 def _fact_record(
@@ -247,9 +246,7 @@ def _fact_record(
             record[target] = _sanitize(fact.get(source))
 
     metadata = {
-        key: _sanitize(fact.get(key))
-        for key in _METADATA_KEYS
-        if fact.get(key) not in (None, {}, [])
+        key: _sanitize(fact.get(key)) for key in _METADATA_KEYS if fact.get(key) not in (None, {}, [])
     }
     metadata = _sanitize(metadata)
     if metadata:
@@ -264,13 +261,7 @@ def _coverage_record(
     scope: dict[str, str],
     retained_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    refs = sorted(
-        {
-            ref
-            for record in retained_records
-            for ref in record.get("evidence_refs") or []
-        }
-    )
+    refs = sorted({ref for record in retained_records for ref in record.get("evidence_refs") or []})
     source_system = str(result.get("source_system") or "").strip() or "coverage"
     record = {
         "entity_id": scope["entity_id"],
@@ -407,12 +398,15 @@ def _topology_scope_anchor_ref(
     for fact in facts:
         if not isinstance(fact, dict):
             continue
-        if _fact_record(
-            fact,
-            result,
-            scope,
-            topology_scope_anchor_ref="",
-        ) is None:
+        if (
+            _fact_record(
+                fact,
+                result,
+                scope,
+                topology_scope_anchor_ref="",
+            )
+            is None
+        ):
             continue
         value = fact.get("value")
         if not isinstance(value, dict):
@@ -474,15 +468,9 @@ def _fact_type(dimension: str, source_system: str, attribute: str) -> str:
 
 def _record_sort_key(record: dict[str, Any]) -> tuple[Any, ...]:
     return (
-        {"direct": 0, "derived": 1, "related_context": 2}.get(
-            str(record.get("directness")), 3
-        ),
-        {"high": 0, "medium": 1, "low": 2, "weak": 3}.get(
-            str(record.get("confidence")), 4
-        ),
-        {"critical": 0, "strong": 1, "supporting": 2, "context": 3}.get(
-            record.get("strength"), 4
-        ),
+        {"direct": 0, "derived": 1, "related_context": 2}.get(str(record.get("directness")), 3),
+        {"high": 0, "medium": 1, "low": 2, "weak": 3}.get(str(record.get("confidence")), 4),
+        {"critical": 0, "strong": 1, "supporting": 2, "context": 3}.get(record.get("strength"), 4),
         str(record.get("dimension") or ""),
         str(record.get("attribute") or ""),
         str(record.get("timestamp") or record.get("start") or ""),
@@ -497,28 +485,19 @@ def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized = {
         key: value
         for key, value in normalized.items()
-        if key not in _OPTIONAL_RECORD_FIELDS
-        or value not in (None, {}, [])
+        if key not in _OPTIONAL_RECORD_FIELDS or value not in (None, {}, [])
     }
     normalized["source_system"] = str(normalized.get("source_system") or "").strip()
     refs = normalized.get("evidence_refs")
     normalized["evidence_refs"] = sorted(
-        {
-            str(ref).strip()
-            for ref in refs if isinstance(refs, list)
-            if str(ref).strip()
-        }
+        {str(ref).strip() for ref in refs if isinstance(refs, list) if str(ref).strip()}
     )
     return normalized
 
 
 def _sanitize(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            str(key): _sanitize(item)
-            for key, item in value.items()
-            if not _forbidden_key(key)
-        }
+        return {str(key): _sanitize(item) for key, item in value.items() if not _forbidden_key(key)}
     if isinstance(value, (list, tuple)):
         return [_sanitize(item) for item in value]
     return value

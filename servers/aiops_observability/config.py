@@ -51,13 +51,14 @@ def get_config() -> RuntimeConfig:
         cases_dir=cases_dir,
         prometheus_url=os.environ.get("PROMETHEUS_URL", "").strip(),
         elasticsearch_url=(os.environ.get("ELASTICSEARCH_URL") or os.environ.get("ES_URL") or "").strip(),
-        elasticsearch_index=os.environ.get("AIOPS_ES_INDEX", os.environ.get("ES_INDEX", "filebeat-*")).strip(),
-        deepflow_clickhouse_url=(
-            os.environ.get("DEEPFLOW_CLICKHOUSE_URL")
-            or os.environ.get("CLICKHOUSE_URL")
-            or ""
+        elasticsearch_index=os.environ.get(
+            "AIOPS_ES_INDEX", os.environ.get("ES_INDEX", "filebeat-*")
         ).strip(),
-        deepflow_clickhouse_database=os.environ.get("DEEPFLOW_CLICKHOUSE_DATABASE", "flow_log").strip() or "flow_log",
+        deepflow_clickhouse_url=(
+            os.environ.get("DEEPFLOW_CLICKHOUSE_URL") or os.environ.get("CLICKHOUSE_URL") or ""
+        ).strip(),
+        deepflow_clickhouse_database=os.environ.get("DEEPFLOW_CLICKHOUSE_DATABASE", "flow_log").strip()
+        or "flow_log",
         timeout_seconds=int(os.environ.get("AIOPS_SOURCE_TIMEOUT", "30")),
         max_records=int(os.environ.get("AIOPS_MAX_RECORDS", "50")),
         es_exec_enabled=_bool_env("AIOPS_ES_EXEC_ENABLED", True),
@@ -70,7 +71,9 @@ def get_config() -> RuntimeConfig:
         clickhouse_exec_enabled=_bool_env("AIOPS_CLICKHOUSE_EXEC_ENABLED", True),
         clickhouse_exec_namespace=os.environ.get("AIOPS_CLICKHOUSE_EXEC_NAMESPACE", "xnet").strip() or "xnet",
         clickhouse_exec_pod=os.environ.get("AIOPS_CLICKHOUSE_EXEC_POD", "observability-clickhouse-0").strip(),
-        clickhouse_exec_selector=os.environ.get("AIOPS_CLICKHOUSE_EXEC_SELECTOR", "app.kubernetes.io/name=clickhouse").strip(),
+        clickhouse_exec_selector=os.environ.get(
+            "AIOPS_CLICKHOUSE_EXEC_SELECTOR", "app.kubernetes.io/name=clickhouse"
+        ).strip(),
         tempo_exec_enabled=_bool_env("AIOPS_TEMPO_EXEC_ENABLED", True),
         tempo_exec_namespace=os.environ.get("AIOPS_TEMPO_EXEC_NAMESPACE", "xnet").strip() or "xnet",
         tempo_exec_pod=os.environ.get("AIOPS_TEMPO_EXEC_POD", "").strip(),
@@ -86,9 +89,13 @@ def runtime_status() -> dict[str, object]:
         "cases_dir_exists": cfg.cases_dir.exists(),
         "prometheus_configured": bool(cfg.prometheus_url),
         "elasticsearch_configured": bool(cfg.elasticsearch_url) or cfg.es_exec_enabled,
-        "elasticsearch_mode": "direct_url" if cfg.elasticsearch_url else ("kubectl_exec" if cfg.es_exec_enabled else "disabled"),
+        "elasticsearch_mode": "direct_url"
+        if cfg.elasticsearch_url
+        else ("kubectl_exec" if cfg.es_exec_enabled else "disabled"),
         "deepflow_clickhouse_configured": bool(cfg.deepflow_clickhouse_url) or cfg.clickhouse_exec_enabled,
-        "deepflow_mode": "direct_url" if cfg.deepflow_clickhouse_url else ("kubectl_exec" if cfg.clickhouse_exec_enabled else "disabled"),
+        "deepflow_mode": "direct_url"
+        if cfg.deepflow_clickhouse_url
+        else ("kubectl_exec" if cfg.clickhouse_exec_enabled else "disabled"),
         "deepflow_clickhouse_database": cfg.deepflow_clickhouse_database,
         "timeout_seconds": cfg.timeout_seconds,
         "max_records": cfg.max_records,

@@ -118,10 +118,7 @@ def validate_promql_scope(
             masked,
         )
     ]
-    range_selector_spans = [
-        match.span()
-        for match in re.finditer(r"\[[^\[\]]*\]", masked)
-    ]
+    range_selector_spans = [match.span() for match in re.finditer(r"\[[^\[\]]*\]", masked)]
     for match in re.finditer(r"\b[A-Za-z_:][A-Za-z0-9_:]*\b", masked):
         token = match.group(0)
         if (
@@ -160,11 +157,7 @@ def compact_prometheus_result(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         labels = item.get("metric") if isinstance(item.get("metric"), dict) else {}
-        logical_labels = {
-            str(key): str(value)
-            for key, value in labels.items()
-            if key not in SCRAPER_LABELS
-        }
+        logical_labels = {str(key): str(value) for key, value in labels.items() if key not in SCRAPER_LABELS}
         key = tuple(sorted(logical_labels.items()))
         row: dict[str, Any] = {"metric": logical_labels}
         if isinstance(item.get("value"), list):
@@ -263,22 +256,10 @@ def _prepare_range_query(
     )
     range_query = {
         **base_query,
+        **({"requested_time_range": requested_window} if requested_window is not None else {}),
+        **({"time_range_adjustment": window_adjustment} if window_adjustment is not None else {}),
         **(
-            {"requested_time_range": requested_window}
-            if requested_window is not None
-            else {}
-        ),
-        **(
-            {"time_range_adjustment": window_adjustment}
-            if window_adjustment is not None
-            else {}
-        ),
-        **(
-            {
-                "pod_creation_timestamp": entity.get(
-                    "creation_timestamp"
-                )
-            }
+            {"pod_creation_timestamp": entity.get("creation_timestamp")}
             if entity.get("creation_timestamp")
             else {}
         ),
@@ -350,11 +331,7 @@ def _response_error(
 
 
 def _value_unit(series: list[dict[str, Any]]) -> str:
-    value_units = {
-        str(item.get("unit") or "")
-        for item in series
-        if item.get("unit")
-    }
+    value_units = {str(item.get("unit") or "") for item in series if item.get("unit")}
     if len(value_units) == 1:
         return next(iter(value_units))
     return "mixed" if value_units else "unknown"
@@ -367,9 +344,7 @@ def _truncation_stages(compact: dict[str, Any]) -> list[dict[str, Any]]:
             "stage": "tool_query",
             "reason": reason,
             "before": (
-                compact.get("series_count")
-                if reason == "max_series"
-                else compact.get("raw_series_count")
+                compact.get("series_count") if reason == "max_series" else compact.get("raw_series_count")
             ),
             "after": len(returned_series),
         }
@@ -397,16 +372,10 @@ def _success_result(
     facts = _facts(compact.get("series") or [], namespace, pod)
     refs = [fact["ref"] for fact in facts]
     coverage = "present" if compact["raw_series_count"] else "empty"
-    trend_evaluable = any(
-        item.get("trend_evaluable") is True
-        for item in (compact.get("series") or [])
-    )
+    trend_evaluable = any(item.get("trend_evaluable") is True for item in (compact.get("series") or []))
     directness = (
         "direct"
-        if any(
-            item.get("directness") == "direct"
-            for item in (compact.get("series") or [])
-        )
+        if any(item.get("directness") == "direct" for item in (compact.get("series") or []))
         else "related_context"
     )
     returned_series = compact.get("series") or []
@@ -481,8 +450,12 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     if entity_error:
         return _metrics_error(
-            namespace, pod, purpose,
-            entity_error["code"], entity_error["message"], base_query,
+            namespace,
+            pod,
+            purpose,
+            entity_error["code"],
+            entity_error["message"],
+            base_query,
         )
     assert entity is not None
 
@@ -490,13 +463,9 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     params: dict[str, Any] = {"query": promql}
     path = "api/v1/query"
     if query_type == "range":
-        path, range_error = _prepare_range_query(
-            arguments, entity, base_query, params, promql
-        )
+        path, range_error = _prepare_range_query(arguments, entity, base_query, params, promql)
         if range_error:
-            return _metrics_error(
-                namespace, pod, purpose, entity=entity, **range_error
-            )
+            return _metrics_error(namespace, pod, purpose, entity=entity, **range_error)
 
     # Stage 4: query Prometheus.
     payload, status_code = _request_prometheus(path, params)
@@ -506,15 +475,17 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     if response_error:
         code, message, error_entity = response_error
         return _metrics_error(
-            namespace, pod, purpose, code, message,
+            namespace,
+            pod,
+            purpose,
+            code,
+            message,
             {**base_query, "http_status": status_code},
             entity=error_entity,
         )
 
     # Stage 6: build the success contract.
-    result = _success_result(
-        payload, entity, namespace, pod, purpose, query_type, base_query, status_code
-    )
+    result = _success_result(payload, entity, namespace, pod, purpose, query_type, base_query, status_code)
     if result.get("coverage") == "empty":
         _attach_metric_vocabulary(result, namespace, pod)
     return result
@@ -561,7 +532,8 @@ def _attach_metric_vocabulary(result: dict[str, Any], namespace: str, pod: str) 
         omitted = len(names) - len(shown)
         note = (
             f"{len(names)} metric names have series for this Pod in the last {window}m; "
-            "choose from them instead of guessing: " + ",".join(shown)
+            "choose from them instead of guessing: "
+            + ",".join(shown)
             + (f" (+{omitted} more)" if omitted else "")
         )
     result.setdefault("limitations", []).append(note)
@@ -649,11 +621,7 @@ def _annotate_series(
     entity: dict[str, Any],
     query_type: str,
 ) -> list[dict[str, Any]]:
-    application_containers = {
-        str(name)
-        for name in (entity.get("containers") or [])
-        if str(name)
-    }
+    application_containers = {str(name) for name in (entity.get("containers") or []) if str(name)}
     role_order = {
         "application_container": 0,
         "pod_aggregate": 1,
@@ -669,12 +637,7 @@ def _annotate_series(
         name = str(labels.get("name") or "").lower()
         if container and container in application_containers:
             role = "application_container"
-        elif (
-            container.upper() == "POD"
-            or "pause:" in image
-            or "/pause@" in image
-            or "pause" in name
-        ):
+        elif container.upper() == "POD" or "pause:" in image or "/pause@" in image or "pause" in name:
             role = "infrastructure_container"
         elif not container:
             role = "pod_aggregate"
@@ -690,11 +653,7 @@ def _annotate_series(
         row["sample_count"] = sample_count
         row["trend_evaluable"] = query_type == "range" and sample_count >= 2
         row["series_role"] = role
-        row["directness"] = (
-            "direct"
-            if role == "application_container"
-            else "related_context"
-        )
+        row["directness"] = "direct" if role == "application_container" else "related_context"
         annotated.append(row)
     annotated.sort(
         key=lambda item: (
@@ -736,10 +695,7 @@ def _bounded_values(values: list[Any]) -> tuple[list[Any], bool]:
     if numeric_points:
         indexes.add(min(numeric_points, key=lambda item: item[1])[0])
         indexes.add(max(numeric_points, key=lambda item: item[1])[0])
-    evenly_spaced = [
-        round(index * (len(values) - 1) / (MAX_SAMPLES - 1))
-        for index in range(MAX_SAMPLES)
-    ]
+    evenly_spaced = [round(index * (len(values) - 1) / (MAX_SAMPLES - 1)) for index in range(MAX_SAMPLES)]
     for index in evenly_spaced:
         if len(indexes) >= MAX_SAMPLES:
             break
@@ -810,7 +766,7 @@ def _selector_matchers(selector: str) -> dict[str, tuple[str, str]]:
     """{label: (operator, value)} for every matcher, whichever quote style is used."""
     matchers = {}
     for label, operator, double, single, raw in re.findall(
-        r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*'
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*"
         r'(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\'|`([^`]*)`)',
         selector,
     ):
@@ -849,10 +805,7 @@ def _validate_promql_time_bounds(masked: str) -> dict[str, str] | None:
             if int(range_seconds // resolution_seconds) + 1 > MAX_EVALUATION_POINTS:
                 return {
                     "error_code": "query_too_expensive",
-                    "error": (
-                        "PromQL subquery exceeds the "
-                        f"{MAX_EVALUATION_POINTS}-point evaluation budget"
-                    ),
+                    "error": (f"PromQL subquery exceeds the {MAX_EVALUATION_POINTS}-point evaluation budget"),
                 }
 
     max_offset_seconds = 0.0
@@ -912,10 +865,7 @@ def _validate_range_step(
     if points > MAX_EVALUATION_POINTS:
         return {
             "error_code": "query_too_expensive",
-            "error": (
-                "range query exceeds the "
-                f"{MAX_EVALUATION_POINTS}-point backend evaluation budget"
-            ),
+            "error": (f"range query exceeds the {MAX_EVALUATION_POINTS}-point backend evaluation budget"),
         }
     subquery_points = _max_subquery_points(promql)
     combined_points = points * subquery_points
@@ -963,19 +913,29 @@ def _range_window(
         effective_end = _parse_rfc3339(effective["end"])
         lifecycle_start = _parse_rfc3339(not_before)
     except (KeyError, TypeError, ValueError) as exc:
-        return None, requested, None, {
-            "code": "invalid_time_range",
-            "message": str(exc),
-        }
+        return (
+            None,
+            requested,
+            None,
+            {
+                "code": "invalid_time_range",
+                "message": str(exc),
+            },
+        )
     if effective_start >= lifecycle_start:
         return effective, requested, adjustment, None
     if arguments.get("start"):
         if effective_end > lifecycle_start:
             effective["start"] = _format_rfc3339(lifecycle_start)
-            return effective, requested, _lifecycle_adjustment(
-                adjustment,
-                action="clamped_start_to_pod_creation",
-            ), None
+            return (
+                effective,
+                requested,
+                _lifecycle_adjustment(
+                    adjustment,
+                    action="clamped_start_to_pod_creation",
+                ),
+                None,
+            )
 
         fallback_arguments = {}
         if "window_minutes" in arguments:
@@ -992,18 +952,25 @@ def _range_window(
             return None, requested, fallback_adjustment, fallback_error
         return fallback, requested, fallback_adjustment, None
     if lifecycle_start >= effective_end:
-        return None, requested, None, {
-            "code": "invalid_time_range",
-            "message": (
-                "the synthesized query window does not overlap the current "
-                "Pod lifecycle"
-            ),
-        }
+        return (
+            None,
+            requested,
+            None,
+            {
+                "code": "invalid_time_range",
+                "message": ("the synthesized query window does not overlap the current Pod lifecycle"),
+            },
+        )
     effective["start"] = _format_rfc3339(lifecycle_start)
-    return effective, requested, _lifecycle_adjustment(
-        adjustment,
-        action="clamped_start_to_pod_creation",
-    ), None
+    return (
+        effective,
+        requested,
+        _lifecycle_adjustment(
+            adjustment,
+            action="clamped_start_to_pod_creation",
+        ),
+        None,
+    )
 
 
 def _lifecycle_adjustment(
@@ -1034,8 +1001,7 @@ def _prometheus_result_shape_error(
     result_type = data.get("resultType")
     if result_type != expected_result_type:
         return (
-            f"Prometheus {query_type} response resultType must be "
-            f"{expected_result_type}, got {result_type!r}"
+            f"Prometheus {query_type} response resultType must be {expected_result_type}, got {result_type!r}"
         )
     if not isinstance(data.get("result"), list):
         return "Prometheus success response data.result must be an array"
@@ -1052,11 +1018,7 @@ def _max_subquery_points(promql: str) -> int:
             continue
         range_seconds = _prometheus_duration_seconds(range_text)
         resolution_seconds = _prometheus_duration_seconds(resolution_text)
-        if (
-            range_seconds is None
-            or not resolution_seconds
-            or resolution_seconds <= 0
-        ):
+        if range_seconds is None or not resolution_seconds or resolution_seconds <= 0:
             continue
         maximum = max(
             maximum,

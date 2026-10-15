@@ -42,13 +42,23 @@ class ServerAdapterTests(unittest.TestCase):
             server = importlib.import_module(name + "_server")
             tool = getattr(server, "kubernetes_core" if name == "k8s_core" else name)
             if name == "runbook":
-                with patch.object(tool.os, "listdir", return_value=["CLAUDE.md", "README-aiops.md", "README.md"]), patch.dict(tool.os.environ, {"RUNBOOK_SEARCH_PATH": ""}):
+                with (
+                    patch.object(
+                        tool.os, "listdir", return_value=["CLAUDE.md", "README-aiops.md", "README.md"]
+                    ),
+                    patch.dict(tool.os.environ, {"RUNBOOK_SEARCH_PATH": ""}),
+                ):
                     importlib.reload(tool)
             yield name, server, tool
 
     def test_runbook_examples_keep_dynamic_sorted_unique_markdown_names(self):
         server = importlib.import_module("runbook_server")
-        with patch.object(server.runbook, "_get_search_paths", return_value=["/fixture/one", "/fixture/two"]), patch.object(server.runbook.os, "listdir", side_effect=[["z.md", "ignore.txt", "a.md"], ["a.md", "b.md"]]):
+        with (
+            patch.object(server.runbook, "_get_search_paths", return_value=["/fixture/one", "/fixture/two"]),
+            patch.object(
+                server.runbook.os, "listdir", side_effect=[["z.md", "ignore.txt", "a.md"], ["a.md", "b.md"]]
+            ),
+        ):
             self.assertEqual(server.runbook._runbook_list_for_description(), "a.md, b.md, z.md")
 
     def test_ordered_tools_descriptions_and_schemas_are_unchanged(self):
@@ -57,17 +67,29 @@ class ServerAdapterTests(unittest.TestCase):
                 tools = asyncio.run(server.list_tools())
                 serialized = json.dumps(
                     [tool.model_dump(mode="json", by_alias=True, exclude_none=True) for tool in tools],
-                    ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
                 self.assertEqual(hashlib.sha256(serialized.encode()).hexdigest(), TOOL_DIGESTS[name])
 
     def test_success_preserves_text_and_parameter_policy(self):
         arguments = {"none": None, "number": 1, "flag": False, "text": "x", "todos": [{"id": "1"}]}
         for name, server, tool in self.modules():
-            with self.subTest(server=name), patch.object(tool, "call_tool", return_value=" exact\n输出 ") as handler, patch.object(server, "log_tool_call") as started, patch.object(server, "log_tool_result") as ended:
+            with (
+                self.subTest(server=name),
+                patch.object(tool, "call_tool", return_value=" exact\n输出 ") as handler,
+                patch.object(server, "log_tool_call") as started,
+                patch.object(server, "log_tool_result") as ended,
+            ):
                 result = asyncio.run(server.call_tool("example", arguments))
-                self.assertEqual([item.model_dump() for item in result], [{"type": "text", "text": " exact\n输出 ", "annotations": None, "meta": None}])
-                expected = arguments if name == "core_investigation" else {**arguments, "none": "", "todos": ""}
+                self.assertEqual(
+                    [item.model_dump() for item in result],
+                    [{"type": "text", "text": " exact\n输出 ", "annotations": None, "meta": None}],
+                )
+                expected = (
+                    arguments if name == "core_investigation" else {**arguments, "none": "", "todos": ""}
+                )
                 handler.assert_called_once_with("example", expected)
                 started.assert_called_once_with(server._SERVER, "example", arguments)
                 self.assertEqual(ended.call_args.args[:3], (server._SERVER, "example", " exact\n输出 "))
@@ -75,7 +97,12 @@ class ServerAdapterTests(unittest.TestCase):
 
     def test_unknown_tool_text_and_error_logging_policy(self):
         for name, server, tool in self.modules():
-            with self.subTest(server=name), patch.object(tool, "call_tool", return_value=None), patch.object(server, "log_tool_call"), patch.object(server, "log_tool_result") as ended:
+            with (
+                self.subTest(server=name),
+                patch.object(tool, "call_tool", return_value=None),
+                patch.object(server, "log_tool_call"),
+                patch.object(server, "log_tool_result") as ended,
+            ):
                 self.assertEqual(asyncio.run(server.call_tool("missing", {}))[0].text, "未知工具: missing")
                 error = ended.call_args.kwargs.get("error")
                 if name in CAUGHT_ERRORS:
@@ -87,9 +114,16 @@ class ServerAdapterTests(unittest.TestCase):
     def test_exception_conversion_is_not_applied_to_propagating_servers(self):
         for name, server, tool in self.modules():
             error = RuntimeError("fixture failure")
-            with self.subTest(server=name), patch.object(tool, "call_tool", side_effect=error), patch.object(server, "log_tool_call"), patch.object(server, "log_tool_result") as ended:
+            with (
+                self.subTest(server=name),
+                patch.object(tool, "call_tool", side_effect=error),
+                patch.object(server, "log_tool_call"),
+                patch.object(server, "log_tool_result") as ended,
+            ):
                 if name in CAUGHT_ERRORS:
-                    self.assertEqual(asyncio.run(server.call_tool("example", {}))[0].text, "工具调用异常: fixture failure")
+                    self.assertEqual(
+                        asyncio.run(server.call_tool("example", {}))[0].text, "工具调用异常: fixture failure"
+                    )
                     self.assertIs(ended.call_args.kwargs["error"], error)
                 else:
                     with self.assertRaisesRegex(RuntimeError, "fixture failure"):
@@ -98,7 +132,12 @@ class ServerAdapterTests(unittest.TestCase):
 
     def test_empty_text_is_not_unknown_tool(self):
         for name, server, tool in self.modules():
-            with self.subTest(server=name), patch.object(tool, "call_tool", return_value=""), patch.object(server, "log_tool_call"), patch.object(server, "log_tool_result"):
+            with (
+                self.subTest(server=name),
+                patch.object(tool, "call_tool", return_value=""),
+                patch.object(server, "log_tool_call"),
+                patch.object(server, "log_tool_result"),
+            ):
                 self.assertEqual(asyncio.run(server.call_tool("example", None))[0].text, "")
 
 
@@ -126,19 +165,19 @@ class AdapterLoggingOrderTests(unittest.TestCase):
                     def log_result(*args, events=events, catch_errors=catch_errors, output=output, **kwargs):
                         events.append("result")
                         self.assertEqual(args[3], 2.5)
-                        self.assertEqual(
-                            "error" in kwargs, catch_errors and output is None
-                        )
+                        self.assertEqual("error" in kwargs, catch_errors and output is None)
 
                     with patch.object(self.adapter.time, "monotonic", clock):
                         self.adapter.call_text_tool(
-                            "fixture", "example", {}, handler,
+                            "fixture",
+                            "example",
+                            {},
+                            handler,
                             log_call=lambda *args, events=events: events.append("call"),
-                            log_result=log_result, catch_errors=catch_errors,
+                            log_result=log_result,
+                            catch_errors=catch_errors,
                         )
-                    self.assertEqual(
-                        events, ["call", "clock", "handler", "clock", "result"]
-                    )
+                    self.assertEqual(events, ["call", "clock", "handler", "clock", "result"])
 
     def test_initial_log_failure_is_outside_catch_boundary(self):
         for catch_errors in (False, True):
@@ -147,9 +186,13 @@ class AdapterLoggingOrderTests(unittest.TestCase):
                 with patch.object(self.adapter.time, "monotonic") as clock:
                     with self.assertRaisesRegex(RuntimeError, "initial logging"):
                         self.adapter.call_text_tool(
-                            "fixture", "example", {}, handler,
+                            "fixture",
+                            "example",
+                            {},
+                            handler,
                             log_call=Mock(side_effect=RuntimeError("initial logging")),
-                            log_result=ended, catch_errors=catch_errors,
+                            log_result=ended,
+                            catch_errors=catch_errors,
                         )
                 clock.assert_not_called()
                 handler.assert_not_called()
@@ -163,8 +206,13 @@ class AdapterLoggingOrderTests(unittest.TestCase):
                 with patch.object(self.adapter.time, "monotonic", side_effect=[10, 12, 15]):
                     if catch_errors:
                         result = self.adapter.call_text_tool(
-                            "fixture", "example", {}, Mock(return_value="success"),
-                            log_call=Mock(), log_result=ended, catch_errors=True,
+                            "fixture",
+                            "example",
+                            {},
+                            Mock(return_value="success"),
+                            log_call=Mock(),
+                            log_result=ended,
+                            catch_errors=True,
                         )
                         self.assertEqual(result[0].text, "工具调用异常: result logging")
                         self.assertEqual(ended.call_count, 2)
@@ -173,8 +221,13 @@ class AdapterLoggingOrderTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(RuntimeError, "result logging"):
                             self.adapter.call_text_tool(
-                                "fixture", "example", {}, Mock(return_value="success"),
-                                log_call=Mock(), log_result=ended, catch_errors=False,
+                                "fixture",
+                                "example",
+                                {},
+                                Mock(return_value="success"),
+                                log_call=Mock(),
+                                log_result=ended,
+                                catch_errors=False,
                             )
                         self.assertEqual(ended.call_count, 1)
 
@@ -182,23 +235,35 @@ class AdapterLoggingOrderTests(unittest.TestCase):
         ended = Mock(side_effect=RuntimeError("error logging"))
         with self.assertRaisesRegex(RuntimeError, "error logging"):
             self.adapter.call_text_tool(
-                "fixture", "example", {},
+                "fixture",
+                "example",
+                {},
                 Mock(side_effect=ValueError("handler failure")),
-                log_call=Mock(), log_result=ended, catch_errors=True,
+                log_call=Mock(),
+                log_result=ended,
+                catch_errors=True,
             )
         self.assertEqual(ended.call_count, 1)
         self.assertEqual(str(ended.call_args.kwargs["error"]), "handler failure")
 
     def test_threaded_adapter_runs_handler_off_the_event_loop_thread(self):
         import threading
+
         seen = []
 
         def handler(name, arguments):
             seen.append(threading.get_ident())
             return "ok"
 
-        result = asyncio.run(self.adapter.call_text_tool_in_thread(
-            "fixture", "example", {}, handler, log_call=Mock(), log_result=Mock(),
-        ))
+        result = asyncio.run(
+            self.adapter.call_text_tool_in_thread(
+                "fixture",
+                "example",
+                {},
+                handler,
+                log_call=Mock(),
+                log_result=Mock(),
+            )
+        )
         self.assertEqual(result[0].text, "ok")
         self.assertNotEqual(seen, [threading.get_ident()])

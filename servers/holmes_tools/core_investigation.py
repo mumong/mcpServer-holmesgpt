@@ -3,6 +3,7 @@ core_investigation 工具：TodoWrite
 移植自 holmes/mcp/tools/core_investigation_tools.py
 与 Holmes 内置 core_investigation 行为一致：接收任务列表，格式化后返回供 LLM 使用。
 """
+
 import json
 from typing import Any, Dict, List, Optional
 
@@ -49,11 +50,13 @@ def _run_todo_write(arguments: dict) -> str:
     tasks: List[Dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict):
-            tasks.append({
-                "id": item.get("id", ""),
-                "content": item.get("content", ""),
-                "status": item.get("status", "pending"),
-            })
+            tasks.append(
+                {
+                    "id": item.get("id", ""),
+                    "content": item.get("content", ""),
+                    "status": item.get("status", "pending"),
+                }
+            )
         else:
             tasks.append({"id": "", "content": str(item), "status": "pending"})
     formatted = _format_tasks(tasks)

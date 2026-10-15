@@ -20,20 +20,26 @@ from ..schemas import EvidenceItem, SourceResult, evidence_id
 from . import _kube
 
 
-def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: int, max_traces: int = 5) -> SourceResult:
+def collect_tempo(
+    *, namespace: str, pod: str, trace_ids: list[str], timeout: int, max_traces: int = 5
+) -> SourceResult:
     cfg = get_config()
     if not cfg.tempo_exec_enabled:
         return SourceResult("tempo", "trace", "absent", error="Tempo kubectl-exec 模式已禁用")
     ids = [t for t in dict.fromkeys(trace_ids) if t][:max_traces]
     if not ids:
         return SourceResult(
-            "tempo", "trace", "empty",
+            "tempo",
+            "trace",
+            "empty",
             error="无可查询的 trace_id（未从 DeepFlow flow 或日志中发现 trace_id；可能该 Pod 未插桩，或采集窗口内无 trace 且日志未打 trace_id）",
         )
     tempo_pod = cfg.tempo_exec_pod or _kube.find_pod(cfg.tempo_exec_namespace, cfg.tempo_exec_selector)
     if not tempo_pod:
         return SourceResult(
-            "tempo", "trace", "absent",
+            "tempo",
+            "trace",
+            "absent",
             error=f"未找到 Tempo/LGTM Pod（ns={cfg.tempo_exec_namespace} selector={cfg.tempo_exec_selector}）",
         )
     found: list[dict[str, Any]] = []
@@ -88,7 +94,9 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
                 },
             )
         return SourceResult(
-            "tempo", "trace", "empty",
+            "tempo",
+            "trace",
+            "empty",
             error=f"Tempo 中未找到这些 trace 的 span（查询了 {len(ids)} 个 trace_id）",
             query_meta={
                 "queried_trace_ids": ids,
@@ -115,7 +123,9 @@ def collect_tempo(*, namespace: str, pod: str, trace_ids: list[str], timeout: in
         )
     ]
     return SourceResult(
-        "tempo", "trace", "weak" if failures else "present",
+        "tempo",
+        "trace",
+        "weak" if failures else "present",
         records=found,
         evidence=evidence,
         query_meta={
@@ -162,13 +172,15 @@ def _span_sample(span: Any, service: str, fallback_trace_id: str) -> dict[str, A
             item.get("traceId") or item.get("trace_id"),
             fallback_trace_id,
         ),
-        "span_id": _normalize_span_id(
-            item.get("spanId") or item.get("span_id")
-        ),
+        "span_id": _normalize_span_id(item.get("spanId") or item.get("span_id")),
         "service": service or attributes.get("service.name") or "",
         "name": item.get("name") or "",
-        "start": _readable_time(item.get("startTimeUnixNano") or item.get("start_time_unix_nano") or item.get("start")),
-        "end": _readable_time(item.get("endTimeUnixNano") or item.get("end_time_unix_nano") or item.get("end")),
+        "start": _readable_time(
+            item.get("startTimeUnixNano") or item.get("start_time_unix_nano") or item.get("start")
+        ),
+        "end": _readable_time(
+            item.get("endTimeUnixNano") or item.get("end_time_unix_nano") or item.get("end")
+        ),
         "attributes": attributes,
     }
 
@@ -239,4 +251,8 @@ def _readable_time(value: Any) -> str:
         return text
     if nanoseconds < 1_000_000_000_000_000:
         return text
-    return datetime.fromtimestamp(nanoseconds / 1_000_000_000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.fromtimestamp(nanoseconds / 1_000_000_000, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )

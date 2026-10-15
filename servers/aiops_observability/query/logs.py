@@ -50,9 +50,7 @@ DEFAULT_SOURCE_FIELDS = [
     "kubernetes.container.name",
     "kubernetes.container_name",
 ]
-SAFE_SOURCE_FIELD_RE = re.compile(
-    r"[A-Za-z0-9_@-]+(?:\.[A-Za-z0-9_@-]+)*\Z"
-)
+SAFE_SOURCE_FIELD_RE = re.compile(r"[A-Za-z0-9_@-]+(?:\.[A-Za-z0-9_@-]+)*\Z")
 
 
 def build_query_body(
@@ -137,8 +135,7 @@ def build_query_body(
             {
                 "bool": {
                     "should": [
-                        {"term": {field: trace_id}}
-                        for field in ("trace.id", "trace_id", "trace.id.keyword")
+                        {"term": {field: trace_id}} for field in ("trace.id", "trace_id", "trace.id.keyword")
                     ],
                     "minimum_should_match": 1,
                 }
@@ -224,9 +221,7 @@ def _parse_filters(
 
     requested_fields = _clean_strings(arguments.get("fields"))
     invalid_fields = [
-        field
-        for field in requested_fields
-        if len(field) > 128 or not SAFE_SOURCE_FIELD_RE.fullmatch(field)
+        field for field in requested_fields if len(field) > 128 or not SAFE_SOURCE_FIELD_RE.fullmatch(field)
     ]
     if invalid_fields:
         return None, (
@@ -364,11 +359,7 @@ def _log_facts(
                 "ref": ref,
                 "source_system": "elasticsearch",
                 "dimension": "logging",
-                "entity": "/".join(
-                    part
-                    for part in (namespace, pod, sample.get("container"))
-                    if part
-                ),
+                "entity": "/".join(part for part in (namespace, pod, sample.get("container")) if part),
                 "pod_uid": sample.get("pod_uid"),
                 "observed_at": sample.get("timestamp"),
                 "name": "log.message",
@@ -394,10 +385,7 @@ def _truncation_stages(
     returned_count: int,
 ) -> list[dict[str, Any]]:
     stages = []
-    if (
-        str(backend_total.get("relation") or "eq") != "eq"
-        or backend_matched > backend_retrieved
-    ):
+    if str(backend_total.get("relation") or "eq") != "eq" or backend_matched > backend_retrieved:
         stages.append(
             {
                 "stage": "backend",
@@ -488,10 +476,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     if query_metadata_exceeds_budget(body):
         return fail(
             "query_metadata_too_large",
-            (
-                "generated Elasticsearch DSL exceeds the "
-                f"{MAX_QUERY_METADATA_BYTES}-byte metadata budget"
-            ),
+            (f"generated Elasticsearch DSL exceeds the {MAX_QUERY_METADATA_BYTES}-byte metadata budget"),
             entity=entity,
             query=query_descriptor(body, executed=False),
         )
@@ -514,11 +499,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         }
     ]
     allow_fallback = bool(arguments.get("allow_name_fallback", True))
-    if (
-        not uid_hits
-        and identity_basis == "pod_uid"
-        and allow_fallback
-    ):
+    if not uid_hits and identity_basis == "pod_uid" and allow_fallback:
         fallback, fallback_error = _run_name_fallback(
             lambda code, message, **extra: fail(code, message, entity=entity, **extra),
             common,
@@ -577,9 +558,7 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
         "trace_id": common["trace_id"],
         "dsl": body,
         "executions": query_executions,
-        "dsl_sha256": hashlib.sha256(
-            json.dumps(body, sort_keys=True).encode("utf-8")
-        ).hexdigest()[:16],
+        "dsl_sha256": hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()[:16],
     }
     backend_total = _backend_total(payload)
     backend_matched = int(backend_total.get("value") or 0)
@@ -632,9 +611,7 @@ def _query_elasticsearch(body: dict[str, Any]) -> dict[str, Any]:
         if requests is None:
             return {"error": "requests is not installed"}
         endpoint = urljoin(
-            cfg.elasticsearch_url
-            if cfg.elasticsearch_url.endswith("/")
-            else cfg.elasticsearch_url + "/",
+            cfg.elasticsearch_url if cfg.elasticsearch_url.endswith("/") else cfg.elasticsearch_url + "/",
             f"{cfg.elasticsearch_index}/_search",
         )
         try:
@@ -713,8 +690,7 @@ def _dedupe_records(
         observed_uid = str(_nested_value(kubernetes, "pod", "uid") or "").strip()
         directness = (
             "direct"
-            if identity_basis == "pod_uid"
-            or (current_pod_uid and observed_uid == current_pod_uid)
+            if identity_basis == "pod_uid" or (current_pod_uid and observed_uid == current_pod_uid)
             else "related_context"
         )
         key = (timestamp, str(container or ""), message)
@@ -728,9 +704,7 @@ def _dedupe_records(
             "document_id": str(hit.get("_id") or ""),
         }
         selected_fields = {
-            field: value
-            for field in requested_fields
-            if (value := _field_value(source, field)) is not None
+            field: value for field in requested_fields if (value := _field_value(source, field)) is not None
         }
         records.append(
             {
@@ -743,14 +717,9 @@ def _dedupe_records(
                 "pod_uid": observed_uid or None,
                 "directness": directness,
                 "level": (
-                    _nested_value(source, "log", "level")
-                    or source.get("level")
-                    or source.get("severity")
+                    _nested_value(source, "log", "level") or source.get("level") or source.get("severity")
                 ),
-                "trace_id": (
-                    _nested_value(source, "trace", "id")
-                    or source.get("trace_id")
-                ),
+                "trace_id": (_nested_value(source, "trace", "id") or source.get("trace_id")),
                 "raw_ref": raw_ref,
                 "fields": selected_fields,
             }
@@ -823,6 +792,5 @@ def _entity_lifecycle_changed(
     if not isinstance(after, dict):
         return True
     return any(
-        str(before.get(key) or "") != str(after.get(key) or "")
-        for key in ("pod_uid", "creation_timestamp")
+        str(before.get(key) or "") != str(after.get(key) or "") for key in ("pod_uid", "creation_timestamp")
     )

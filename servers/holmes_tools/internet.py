@@ -2,6 +2,7 @@
 internet: fetch_webpage - fetch URL and convert HTML to Markdown.
 Requires: requests, beautifulsoup4, markdownify.
 """
+
 import os
 from typing import Optional
 
@@ -28,10 +29,15 @@ def _run_fetch_webpage(arguments: dict) -> str:
         ct = r.headers.get("content-type", "")
     except Exception as e:
         return "Error fetching {}: {}".format(url, e)
-    if "text/html" in ct or (not ct and content.strip().lower().startswith("<!doctype")) or "<html" in content[:500].lower():
+    if (
+        "text/html" in ct
+        or (not ct and content.strip().lower().startswith("<!doctype"))
+        or "<html" in content[:500].lower()
+    ):
         try:
             from bs4 import BeautifulSoup
             from markdownify import markdownify
+
             soup = BeautifulSoup(content, "html.parser")
             for tag in ("script", "style", "nav", "header", "footer", "iframe"):
                 for el in soup.find_all(tag):

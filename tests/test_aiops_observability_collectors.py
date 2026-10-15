@@ -44,7 +44,12 @@ class KubernetesCollectorTests(unittest.TestCase):
 
     def test_success_extracts_last_terminated_and_prefers_uid(self):
         pod_json = {
-            "metadata": {"name": "oom-pod", "namespace": "aiops-temp", "uid": "uid-123", "labels": {"app": "x"}},
+            "metadata": {
+                "name": "oom-pod",
+                "namespace": "aiops-temp",
+                "uid": "uid-123",
+                "labels": {"app": "x"},
+            },
             "spec": {"nodeName": "node-1", "containers": [{"name": "app"}]},
             "status": {
                 "phase": "Running",
@@ -53,7 +58,9 @@ class KubernetesCollectorTests(unittest.TestCase):
                     {
                         "name": "app",
                         "restartCount": 3,
-                        "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137, "finishedAt": "t"}},
+                        "lastState": {
+                            "terminated": {"reason": "OOMKilled", "exitCode": 137, "finishedAt": "t"}
+                        },
                     }
                 ],
             },
@@ -62,8 +69,9 @@ class KubernetesCollectorTests(unittest.TestCase):
         def fake_run(args, timeout=30):
             return True, "ok-output"
 
-        with patch.object(kubernetes, "get_pod", return_value=(pod_json, None)), patch.object(
-            kubernetes, "_run_kubectl", side_effect=fake_run
+        with (
+            patch.object(kubernetes, "get_pod", return_value=(pod_json, None)),
+            patch.object(kubernetes, "_run_kubectl", side_effect=fake_run),
         ):
             result = kubernetes.collect_kubernetes("aiops-temp", "oom-pod")
 
@@ -255,12 +263,20 @@ class PrometheusCollectorTests(unittest.TestCase):
 
     def test_present_when_series_returned(self):
         payload = {"status": "success", "data": {"result": [{"metric": {}, "value": [0, "1"]}]}}
-        with patch.object(prometheus, "_query", return_value=payload), patch.object(
-            prometheus, "_query_range", return_value={"status": "success", "data": {"result": []}}
+        with (
+            patch.object(prometheus, "_query", return_value=payload),
+            patch.object(
+                prometheus, "_query_range", return_value={"status": "success", "data": {"result": []}}
+            ),
         ):
             result = prometheus.collect_prometheus(
-                prometheus_url="http://prom:9090", namespace="ns", pod="p", pod_uid="uid", timeout=5,
-                start="2026-07-13T00:00:00Z", end="2026-07-13T00:30:00Z",
+                prometheus_url="http://prom:9090",
+                namespace="ns",
+                pod="p",
+                pod_uid="uid",
+                timeout=5,
+                start="2026-07-13T00:00:00Z",
+                end="2026-07-13T00:30:00Z",
             )
         self.assertEqual(result.coverage, "present")
         self.assertTrue(result.evidence)
@@ -268,12 +284,18 @@ class PrometheusCollectorTests(unittest.TestCase):
 
     def test_empty_when_success_but_no_series(self):
         payload = {"status": "success", "data": {"result": []}}
-        with patch.object(prometheus, "_query", return_value=payload), patch.object(
-            prometheus, "_query_range", return_value=payload
+        with (
+            patch.object(prometheus, "_query", return_value=payload),
+            patch.object(prometheus, "_query_range", return_value=payload),
         ):
             result = prometheus.collect_prometheus(
-                prometheus_url="http://prom:9090", namespace="ns", pod="p", pod_uid=None, timeout=5,
-                start="2026-07-13T00:00:00Z", end="2026-07-13T00:30:00Z",
+                prometheus_url="http://prom:9090",
+                namespace="ns",
+                pod="p",
+                pod_uid=None,
+                timeout=5,
+                start="2026-07-13T00:00:00Z",
+                end="2026-07-13T00:30:00Z",
             )
         self.assertEqual(result.coverage, "empty")
 
@@ -298,8 +320,10 @@ class ElasticsearchCollectorTests(unittest.TestCase):
             self.assertEqual(elasticsearch.es_credentials(cfg), ("u", "p"))
             self.assertEqual(elasticsearch.es_credentials(cfg), ("u", "p"))
         self.assertEqual(read.call_count, 2)
-        with patch.object(elasticsearch.time, "monotonic", return_value=1e12), \
-             patch.object(elasticsearch._kube, "secret_value", side_effect=["u2", "p2"]):
+        with (
+            patch.object(elasticsearch.time, "monotonic", return_value=1e12),
+            patch.object(elasticsearch._kube, "secret_value", side_effect=["u2", "p2"]),
+        ):
             self.assertEqual(elasticsearch.es_credentials(cfg), ("u2", "p2"))
 
     def test_log_evidence_contains_at_most_eight_readable_samples(self):
@@ -334,22 +358,42 @@ class ElasticsearchCollectorTests(unittest.TestCase):
 
     def test_absent_when_url_missing_and_exec_disabled(self):
         import os
-        with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "false", "ELASTICSEARCH_URL": "", "ES_URL": ""}):
+
+        with patch.dict(
+            os.environ, {"AIOPS_ES_EXEC_ENABLED": "false", "ELASTICSEARCH_URL": "", "ES_URL": ""}
+        ):
             result = elasticsearch.collect_elasticsearch(
-                elasticsearch_url="", index="filebeat-*", namespace="ns", pod="p",
-                pod_uid=None, start="s", end="e", timeout=5, max_records=10,
+                elasticsearch_url="",
+                index="filebeat-*",
+                namespace="ns",
+                pod="p",
+                pod_uid=None,
+                start="s",
+                end="e",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(result.coverage, "absent")
 
     def test_exec_mode_auto_fetches_creds_and_returns_present(self):
         import os
+
         hits = {"hits": {"hits": [{"_source": {"@timestamp": "t", "message": "oom growth"}}]}}
-        with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}), \
-             patch.object(elasticsearch._kube, "secret_value", side_effect=["elastic", "pw"]), \
-             patch.object(elasticsearch._kube, "exec_in_pod", return_value=(True, json.dumps(hits), "")):
+        with (
+            patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}),
+            patch.object(elasticsearch._kube, "secret_value", side_effect=["elastic", "pw"]),
+            patch.object(elasticsearch._kube, "exec_in_pod", return_value=(True, json.dumps(hits), "")),
+        ):
             result = elasticsearch.collect_elasticsearch(
-                elasticsearch_url="", index="filebeat-*", namespace="aiops-temp", pod="oom-pod",
-                pod_uid="uid", start="s", end="e", timeout=5, max_records=10,
+                elasticsearch_url="",
+                index="filebeat-*",
+                namespace="aiops-temp",
+                pod="oom-pod",
+                pod_uid="uid",
+                start="s",
+                end="e",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(result.coverage, "present")
         self.assertIn("kubectl exec", result.evidence[0].summary)
@@ -368,11 +412,21 @@ class ElasticsearchCollectorTests(unittest.TestCase):
 
     def test_exec_mode_absent_when_no_credentials(self):
         import os
-        with patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}), \
-             patch.object(elasticsearch._kube, "secret_value", return_value=None):
+
+        with (
+            patch.dict(os.environ, {"AIOPS_ES_EXEC_ENABLED": "true", "ELASTICSEARCH_URL": "", "ES_URL": ""}),
+            patch.object(elasticsearch._kube, "secret_value", return_value=None),
+        ):
             result = elasticsearch.collect_elasticsearch(
-                elasticsearch_url="", index="filebeat-*", namespace="ns", pod="p",
-                pod_uid=None, start="s", end="e", timeout=5, max_records=10,
+                elasticsearch_url="",
+                index="filebeat-*",
+                namespace="ns",
+                pod="p",
+                pod_uid=None,
+                start="s",
+                end="e",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(result.coverage, "absent")
         self.assertIn("凭证", result.error or "")
@@ -381,24 +435,45 @@ class ElasticsearchCollectorTests(unittest.TestCase):
         hits_payload = {"hits": {"hits": [{"_source": {"@timestamp": "t", "message": "oom"}}]}}
         with patch.object(elasticsearch._http.SESSION, "post", return_value=_Resp(hits_payload)):
             present = elasticsearch.collect_elasticsearch(
-                elasticsearch_url="http://es:9200", index="filebeat-*", namespace="ns", pod="p",
-                pod_uid="uid", start="s", end="e", timeout=5, max_records=10,
+                elasticsearch_url="http://es:9200",
+                index="filebeat-*",
+                namespace="ns",
+                pod="p",
+                pod_uid="uid",
+                start="s",
+                end="e",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(present.coverage, "present")
         self.assertTrue(present.evidence)
 
         with patch.object(elasticsearch._http.SESSION, "post", return_value=_Resp({"hits": {"hits": []}})):
             empty = elasticsearch.collect_elasticsearch(
-                elasticsearch_url="http://es:9200", index="filebeat-*", namespace="ns", pod="p",
-                pod_uid=None, start="s", end="e", timeout=5, max_records=10,
+                elasticsearch_url="http://es:9200",
+                index="filebeat-*",
+                namespace="ns",
+                pod="p",
+                pod_uid=None,
+                start="s",
+                end="e",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(empty.coverage, "empty")
 
     def test_error_when_request_raises(self):
         with patch.object(elasticsearch._http.SESSION, "post", side_effect=RuntimeError("conn refused")):
             result = elasticsearch.collect_elasticsearch(
-                elasticsearch_url="http://es:9200", index="filebeat-*", namespace="ns", pod="p",
-                pod_uid=None, start="s", end="e", timeout=5, max_records=10,
+                elasticsearch_url="http://es:9200",
+                index="filebeat-*",
+                namespace="ns",
+                pod="p",
+                pod_uid=None,
+                start="s",
+                end="e",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(result.coverage, "error")
         self.assertIn("conn refused", result.error or "")
@@ -488,31 +563,66 @@ class DeepflowCollectorTests(unittest.TestCase):
 
     def test_absent_when_url_missing_and_exec_disabled(self):
         import os
-        with patch.dict(os.environ, {"AIOPS_CLICKHOUSE_EXEC_ENABLED": "false", "DEEPFLOW_CLICKHOUSE_URL": "", "CLICKHOUSE_URL": ""}):
+
+        with patch.dict(
+            os.environ,
+            {"AIOPS_CLICKHOUSE_EXEC_ENABLED": "false", "DEEPFLOW_CLICKHOUSE_URL": "", "CLICKHOUSE_URL": ""},
+        ):
             absent = deepflow.collect_deepflow(
-                clickhouse_url="", clickhouse_database="flow_log", namespace="ns", pod="p",
-                pod_ip="10.0.0.1", node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
-                timeout=5, max_records=10,
+                clickhouse_url="",
+                clickhouse_database="flow_log",
+                namespace="ns",
+                pod="p",
+                pod_ip="10.0.0.1",
+                node="n",
+                start="2026-07-08T05:00:00Z",
+                end="2026-07-08T06:00:00Z",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(absent.coverage, "absent")
 
     def test_empty_without_pod_ip(self):
         empty = deepflow.collect_deepflow(
-            clickhouse_url="http://ch:8123", clickhouse_database="flow_log", namespace="ns", pod="p",
-            pod_ip=None, node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
-            timeout=5, max_records=10,
+            clickhouse_url="http://ch:8123",
+            clickhouse_database="flow_log",
+            namespace="ns",
+            pod="p",
+            pod_ip=None,
+            node="n",
+            start="2026-07-08T05:00:00Z",
+            end="2026-07-08T06:00:00Z",
+            timeout=5,
+            max_records=10,
         )
         self.assertEqual(empty.coverage, "empty")
 
     def test_exec_mode_queries_clickhouse_and_returns_present(self):
         import os
+
         rows = {"data": [{"trace_id": "abc", "l7_protocol_str": "HTTP", "ip4_0": "10.0.0.10"}]}
-        with patch.dict(os.environ, {"AIOPS_CLICKHOUSE_EXEC_ENABLED": "true", "DEEPFLOW_CLICKHOUSE_URL": "", "CLICKHOUSE_URL": ""}), \
-             patch.object(deepflow._kube, "exec_in_pod", return_value=(True, json.dumps(rows), "")):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AIOPS_CLICKHOUSE_EXEC_ENABLED": "true",
+                    "DEEPFLOW_CLICKHOUSE_URL": "",
+                    "CLICKHOUSE_URL": "",
+                },
+            ),
+            patch.object(deepflow._kube, "exec_in_pod", return_value=(True, json.dumps(rows), "")),
+        ):
             result = deepflow.collect_deepflow(
-                clickhouse_url="", clickhouse_database="flow_log", namespace="aiops-temp", pod="pod",
-                pod_ip="10.0.0.10", node="master", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
-                timeout=5, max_records=10,
+                clickhouse_url="",
+                clickhouse_database="flow_log",
+                namespace="aiops-temp",
+                pod="pod",
+                pod_ip="10.0.0.10",
+                node="master",
+                start="2026-07-08T05:00:00Z",
+                end="2026-07-08T06:00:00Z",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(result.coverage, "present")
         self.assertEqual(result.evidence[0].confidence, "medium")  # weak, never high
@@ -522,9 +632,16 @@ class DeepflowCollectorTests(unittest.TestCase):
         payload = {"data": [{"trace_id": "abc", "l7_protocol": "HTTP"}]}
         with patch.object(deepflow._http.SESSION, "post", return_value=_Resp(payload)):
             result = deepflow.collect_deepflow(
-                clickhouse_url="http://ch:8123", clickhouse_database="flow_log", namespace="ns", pod="p",
-                pod_ip="10.0.0.10", node="n", start="2026-07-08T05:00:00Z", end="2026-07-08T06:00:00Z",
-                timeout=5, max_records=10,
+                clickhouse_url="http://ch:8123",
+                clickhouse_database="flow_log",
+                namespace="ns",
+                pod="p",
+                pod_ip="10.0.0.10",
+                node="n",
+                start="2026-07-08T05:00:00Z",
+                end="2026-07-08T06:00:00Z",
+                timeout=5,
+                max_records=10,
             )
         self.assertEqual(result.coverage, "present")
         self.assertEqual(result.evidence[0].confidence, "medium")  # pod-ip flow is weak, never high
@@ -539,15 +656,39 @@ class DeepflowCollectorTests(unittest.TestCase):
         # eBPF auto-tracing: flows sharing a syscall_trace_id form a call chain
         # WITHOUT app instrumentation.
         rows = [
-            {"time": "t1", "src_ip": "10.0.0.1", "dst_ip": "10.0.0.2", "l7_protocol_str": "HTTP",
-             "request_resource": "/api", "response_code": 200, "response_duration": 5,
-             "syscall_trace_id_request": "999", "trace_id": ""},
-            {"time": "t2", "src_ip": "10.0.0.2", "dst_ip": "10.0.0.3", "l7_protocol_str": "MySQL",
-             "request_resource": "SELECT 1", "response_code": None, "response_duration": 3,
-             "syscall_trace_id_request": "999", "trace_id": ""},
-            {"time": "t3", "src_ip": "10.0.0.9", "dst_ip": "10.0.0.2", "l7_protocol_str": "HTTP",
-             "request_resource": "/other", "response_code": 200, "response_duration": 1,
-             "syscall_trace_id_request": "111", "trace_id": ""},
+            {
+                "time": "t1",
+                "src_ip": "10.0.0.1",
+                "dst_ip": "10.0.0.2",
+                "l7_protocol_str": "HTTP",
+                "request_resource": "/api",
+                "response_code": 200,
+                "response_duration": 5,
+                "syscall_trace_id_request": "999",
+                "trace_id": "",
+            },
+            {
+                "time": "t2",
+                "src_ip": "10.0.0.2",
+                "dst_ip": "10.0.0.3",
+                "l7_protocol_str": "MySQL",
+                "request_resource": "SELECT 1",
+                "response_code": None,
+                "response_duration": 3,
+                "syscall_trace_id_request": "999",
+                "trace_id": "",
+            },
+            {
+                "time": "t3",
+                "src_ip": "10.0.0.9",
+                "dst_ip": "10.0.0.2",
+                "l7_protocol_str": "HTTP",
+                "request_resource": "/other",
+                "response_code": 200,
+                "response_duration": 1,
+                "syscall_trace_id_request": "111",
+                "trace_id": "",
+            },
         ]
         chains = deepflow._build_call_chains(rows)
         self.assertEqual(len(chains), 1)  # only syscall 999 has 2 hops
@@ -596,11 +737,24 @@ class TopologyTests(unittest.TestCase):
         self.assertEqual(call_edge["confidence"], "high")
 
     def test_builds_owner_service_and_peer_topology(self):
-        primary = {"namespace": "aiops-temp", "name": "web-1", "uid": "u1", "pod_ip": "10.0.0.5", "node": "node1"}
+        primary = {
+            "namespace": "aiops-temp",
+            "name": "web-1",
+            "uid": "u1",
+            "pod_ip": "10.0.0.5",
+            "node": "node1",
+        }
         k8s_record = {
             "containers": ["app"],
             "owner_chain": [{"kind": "ReplicaSet", "name": "web-abc"}, {"kind": "Deployment", "name": "web"}],
-            "services": [{"name": "web-svc", "selector": {"app": "web"}, "cluster_ip": "10.96.0.1", "ports": [{"port": 80}]}],
+            "services": [
+                {
+                    "name": "web-svc",
+                    "selector": {"app": "web"},
+                    "cluster_ip": "10.96.0.1",
+                    "ports": [{"port": 80}],
+                }
+            ],
         }
         entities, edges, summary = build_topology(
             primary=primary,
@@ -610,8 +764,8 @@ class TopologyTests(unittest.TestCase):
             deepflow_peers=["10.0.0.9", "10.0.0.5", "10.0.0.9"],  # self ip + dup must be skipped
         )
         relations = {e["relation"] for e in edges}
-        self.assertIn("owned_by", relations)   # Pod -> ReplicaSet -> Deployment
-        self.assertIn("selects", relations)    # Service -> Pod
+        self.assertIn("owned_by", relations)  # Pod -> ReplicaSet -> Deployment
+        self.assertIn("selects", relations)  # Service -> Pod
         self.assertIn("communicates_with", relations)  # peer IP -> Pod (weak)
 
         self.assertEqual(sum(1 for e in edges if e["relation"] == "owned_by"), 2)
@@ -621,7 +775,7 @@ class TopologyTests(unittest.TestCase):
         self.assertEqual(svc_edges[0]["target"], "pod:aiops-temp/web-1")
 
         peer_edges = [e for e in edges if e["relation"] == "communicates_with"]
-        self.assertEqual(len(peer_edges), 1)               # self ip + dup excluded
+        self.assertEqual(len(peer_edges), 1)  # self ip + dup excluded
         self.assertEqual(peer_edges[0]["confidence"], "weak")
         self.assertEqual(peer_edges[0]["directness"], "related_context")
 
@@ -690,24 +844,58 @@ class SignalsAndTempoTests(unittest.TestCase):
     def test_signals_have_role_and_interpretation(self):
         from servers.aiops_observability.case_builder import _signals_from_sources
         from servers.aiops_observability.schemas import EvidenceItem, SourceResult
-        k8s = SourceResult("kubernetes", "k8s", "present", evidence=[
-            EvidenceItem(evidence_id="e1", source_system="kubernetes", dimension="k8s",
-                         summary="Last terminated state: api=OOMKilled exit=137", severity="warning")])
-        logs = SourceResult("elasticsearch", "logs", "present", evidence=[
-            EvidenceItem(evidence_id="l1", source_system="elasticsearch", dimension="logs",
-                         summary="allocated business cache chunk=8 approx_mib=16")])
+
+        k8s = SourceResult(
+            "kubernetes",
+            "k8s",
+            "present",
+            evidence=[
+                EvidenceItem(
+                    evidence_id="e1",
+                    source_system="kubernetes",
+                    dimension="k8s",
+                    summary="Last terminated state: api=OOMKilled exit=137",
+                    severity="warning",
+                )
+            ],
+        )
+        logs = SourceResult(
+            "elasticsearch",
+            "logs",
+            "present",
+            evidence=[
+                EvidenceItem(
+                    evidence_id="l1",
+                    source_system="elasticsearch",
+                    dimension="logs",
+                    summary="allocated business cache chunk=8 approx_mib=16",
+                )
+            ],
+        )
         sigs = {s["dimension"]: s for s in _signals_from_sources([k8s, logs])}
         self.assertEqual(sigs["k8s"]["role"], "root_cause_state")
-        self.assertIn("OOMKilled", sigs["k8s"]["observed"])           # human-readable real signal
-        self.assertTrue(sigs["k8s"]["interpretation"])                # plain-language why
+        self.assertIn("OOMKilled", sigs["k8s"]["observed"])  # human-readable real signal
+        self.assertTrue(sigs["k8s"]["interpretation"])  # plain-language why
         self.assertEqual(sigs["logs"]["role"], "pre_failure_behavior")
 
     def test_tracing_role_upgrades_when_trace_id_present(self):
         from servers.aiops_observability.case_builder import _signals_from_sources
         from servers.aiops_observability.schemas import EvidenceItem, SourceResult
-        df = SourceResult("deepflow", "tracing", "present", evidence=[
-            EvidenceItem(evidence_id="d1", source_system="deepflow", dimension="tracing",
-                         summary="DeepFlow flows", trace_correlation={"trace_ids": ["abc"]})])
+
+        df = SourceResult(
+            "deepflow",
+            "tracing",
+            "present",
+            evidence=[
+                EvidenceItem(
+                    evidence_id="d1",
+                    source_system="deepflow",
+                    dimension="tracing",
+                    summary="DeepFlow flows",
+                    trace_correlation={"trace_ids": ["abc"]},
+                )
+            ],
+        )
         sig = _signals_from_sources([df])[0]
         self.assertEqual(sig["role"], "trace_correlated_traffic")
 
@@ -715,6 +903,7 @@ class SignalsAndTempoTests(unittest.TestCase):
         import os
 
         from servers.aiops_observability.collectors import tempo
+
         with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}):
             r = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=[], timeout=5)
         self.assertEqual(r.coverage, "empty")
@@ -724,10 +913,13 @@ class SignalsAndTempoTests(unittest.TestCase):
         import os
 
         from servers.aiops_observability.collectors import tempo
+
         trace_json = json.dumps({"batches": [{"scopeSpans": [{"spans": [{"name": "GET /allocate"}]}]}]})
-        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
-             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
-             patch.object(tempo._kube, "exec_in_pod", return_value=(True, trace_json, "")):
+        with (
+            patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}),
+            patch.object(tempo._kube, "find_pod", return_value="lgtm-0"),
+            patch.object(tempo._kube, "exec_in_pod", return_value=(True, trace_json, "")),
+        ):
             r = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=["t1"], timeout=5)
         self.assertEqual(r.coverage, "present")
         self.assertIn("span", r.evidence[0].summary.lower())
@@ -736,13 +928,16 @@ class SignalsAndTempoTests(unittest.TestCase):
         import os
 
         from servers.aiops_observability.collectors import tempo
-        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
-             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
-             patch.object(
-                 tempo._kube,
-                 "exec_in_pod",
-                 return_value=(False, "", "connection refused"),
-             ):
+
+        with (
+            patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}),
+            patch.object(tempo._kube, "find_pod", return_value="lgtm-0"),
+            patch.object(
+                tempo._kube,
+                "exec_in_pod",
+                return_value=(False, "", "connection refused"),
+            ),
+        ):
             result = tempo.collect_tempo(
                 namespace="ns",
                 pod="p",
@@ -757,16 +952,19 @@ class SignalsAndTempoTests(unittest.TestCase):
         import os
 
         from servers.aiops_observability.collectors import tempo
-        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
-             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
-             patch.object(
-                 tempo._kube,
-                 "exec_in_pod",
-                 side_effect=[
-                     (False, "", "connection refused"),
-                     (True, json.dumps({"batches": []}), ""),
-                 ],
-             ):
+
+        with (
+            patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}),
+            patch.object(tempo._kube, "find_pod", return_value="lgtm-0"),
+            patch.object(
+                tempo._kube,
+                "exec_in_pod",
+                side_effect=[
+                    (False, "", "connection refused"),
+                    (True, json.dumps({"batches": []}), ""),
+                ],
+            ),
+        ):
             result = tempo.collect_tempo(
                 namespace="ns",
                 pod="p",
@@ -786,13 +984,16 @@ class SignalsAndTempoTests(unittest.TestCase):
         import os
 
         from servers.aiops_observability.collectors import tempo
-        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
-             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
-             patch.object(
-                 tempo._kube,
-                 "exec_in_pod",
-                 return_value=(True, json.dumps({"batches": []}), ""),
-             ):
+
+        with (
+            patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}),
+            patch.object(tempo._kube, "find_pod", return_value="lgtm-0"),
+            patch.object(
+                tempo._kube,
+                "exec_in_pod",
+                return_value=(True, json.dumps({"batches": []}), ""),
+            ),
+        ):
             result = tempo.collect_tempo(
                 namespace="ns",
                 pod="p",
@@ -807,6 +1008,7 @@ class SignalsAndTempoTests(unittest.TestCase):
 
     def test_tempo_evidence_contains_at_most_three_readable_span_samples(self):
         import os
+
         trace_payload = {
             "batches": [
                 {
@@ -838,9 +1040,11 @@ class SignalsAndTempoTests(unittest.TestCase):
                 }
             ]
         }
-        with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
-             patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
-             patch.object(tempo._kube, "exec_in_pod", return_value=(True, json.dumps(trace_payload), "")):
+        with (
+            patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}),
+            patch.object(tempo._kube, "find_pod", return_value="lgtm-0"),
+            patch.object(tempo._kube, "exec_in_pod", return_value=(True, json.dumps(trace_payload), "")),
+        ):
             result = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=["abc123"], timeout=5)
 
         samples = result.evidence[0].payload["spans"]
@@ -914,10 +1118,23 @@ class IndependentAuditFixTests(unittest.TestCase):
     def test_extract_trace_ids_from_log_evidence(self):
         from servers.aiops_observability.case_builder import _trace_ids_from_evidence
         from servers.aiops_observability.schemas import EvidenceItem, SourceResult
-        k8s = SourceResult("kubernetes", "k8s", "present", evidence=[
-            EvidenceItem(evidence_id="log1", source_system="kubernetes", dimension="logs",
-                         summary="prev logs",
-                         payload={"log_preview": 'allocated mib=6 trace_id=e2e054876b6a5b936572000000000001 span_id=def01'})])
+
+        k8s = SourceResult(
+            "kubernetes",
+            "k8s",
+            "present",
+            evidence=[
+                EvidenceItem(
+                    evidence_id="log1",
+                    source_system="kubernetes",
+                    dimension="logs",
+                    summary="prev logs",
+                    payload={
+                        "log_preview": "allocated mib=6 trace_id=e2e054876b6a5b936572000000000001 span_id=def01"
+                    },
+                )
+            ],
+        )
         tids = _trace_ids_from_evidence([k8s])
         self.assertIn("e2e054876b6a5b936572000000000001", tids)
 
@@ -929,6 +1146,7 @@ class IndependentAuditFixTests(unittest.TestCase):
         # exercised indirectly; the coverage upgrade logic lives in _write_package.
         # Here we just assert the trace extractor ignores non-log evidence safely.
         from servers.aiops_observability.schemas import SourceResult
+
         empty = SourceResult("elasticsearch", "logs", "empty", evidence=[])
         self.assertEqual(_trace_ids_from_evidence([empty]), [])
 

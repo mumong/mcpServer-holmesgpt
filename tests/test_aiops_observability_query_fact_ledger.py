@@ -29,14 +29,9 @@ _OFFICIAL_LEDGER_SCHEMA_PATH = (
     / "fact-ledger.schema.json"
 )
 _LEDGER_SCHEMA_FIXTURE_PATH = (
-    Path(__file__).resolve().parent
-    / "fixtures"
-    / "contracts"
-    / "fact-ledger.schema.json"
+    Path(__file__).resolve().parent / "fixtures" / "contracts" / "fact-ledger.schema.json"
 )
-_LEDGER_SCHEMA = json.loads(
-    _LEDGER_SCHEMA_FIXTURE_PATH.read_text(encoding="utf-8")
-)
+_LEDGER_SCHEMA = json.loads(_LEDGER_SCHEMA_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
 def _metric_fact(ref="metric-ref", **overrides):
@@ -126,9 +121,7 @@ def _topology_result():
         [fact],
         coverage="present",
     )
-    result.update(
-        {"entities": entities, "edges": edges, "topology_summary": summary}
-    )
+    result.update({"entities": entities, "edges": edges, "topology_summary": summary})
     return result
 
 
@@ -253,16 +246,9 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         )
 
         ledger = fact_ledger.build_fact_ledger(_result(facts=[polluted]))
-        normalized_keys = {
-            re.sub(r"[^a-z0-9]", "", key.lower())
-            for key in _all_keys(ledger)
-        }
+        normalized_keys = {re.sub(r"[^a-z0-9]", "", key.lower()) for key in _all_keys(ledger)}
 
-        self.assertTrue(
-            normalized_keys.isdisjoint(
-                {"diagnosis", "rootcause", "remediation", "groundtruth"}
-            )
-        )
+        self.assertTrue(normalized_keys.isdisjoint({"diagnosis", "rootcause", "remediation", "groundtruth"}))
         self.assertFalse(any(key.startswith("evaluator") for key in normalized_keys))
         self.assertEqual(ledger["records"][0]["value"]["sample"], 3)
         self.assertEqual(
@@ -275,12 +261,14 @@ class CanonicalFactLedgerTests(unittest.TestCase):
             value={
                 "safe": "retained",
                 "diagnosis_label": "leak",
-                "nested": [{
-                    "root_cause_label": "leak",
-                    "remediation_plan": "leak",
-                    "ground_truth_label": "leak",
-                    "evaluator_score": "leak",
-                }],
+                "nested": [
+                    {
+                        "root_cause_label": "leak",
+                        "remediation_plan": "leak",
+                        "ground_truth_label": "leak",
+                        "evaluator_score": "leak",
+                    }
+                ],
             },
             fields={
                 "safe_metadata": "retained",
@@ -295,16 +283,11 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         )
 
         ledger = fact_ledger.build_fact_ledger(_result(facts=[polluted]))
-        normalized_keys = [
-            re.sub(r"[^a-z0-9]", "", key.lower())
-            for key in _all_keys(ledger)
-        ]
+        normalized_keys = [re.sub(r"[^a-z0-9]", "", key.lower()) for key in _all_keys(ledger)]
 
         self.assertFalse(
             any(
-                key.startswith(
-                    ("diagnosis", "rootcause", "remediation", "groundtruth", "evaluator")
-                )
+                key.startswith(("diagnosis", "rootcause", "remediation", "groundtruth", "evaluator"))
                 for key in normalized_keys
             )
         )
@@ -368,8 +351,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
                 records = [] if ledger is None else ledger["records"]
                 self.assertFalse(
                     any(
-                        record["directness"] == "direct"
-                        and record["confidence"] == "high"
+                        record["directness"] == "direct" and record["confidence"] == "high"
                         for record in records
                     )
                 )
@@ -379,9 +361,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
 
         for coverage in ("empty", "absent", "error"):
             with self.subTest(coverage=coverage):
-                ledger = fact_ledger.build_fact_ledger(
-                    _result(facts=[fact], coverage=coverage)
-                )
+                ledger = fact_ledger.build_fact_ledger(_result(facts=[fact], coverage=coverage))
 
                 self.assertIsNone(ledger)
 
@@ -481,9 +461,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
                     if source_location == "fact":
                         result["facts"][0]["source_system"] = source_system
                     else:
-                        result["facts"][0]["value"]["target"][
-                            "source_system"
-                        ] = source_system
+                        result["facts"][0]["value"]["target"]["source_system"] = source_system
 
                     ledger = fact_ledger.build_fact_ledger(result)
 
@@ -491,35 +469,20 @@ class CanonicalFactLedgerTests(unittest.TestCase):
 
     def test_bounded_topology_does_not_launder_endpoint_provenance(self):
         payload = _max_identifier_topology_payload()
-        facts_by_relation = {
-            fact["relation"]: fact
-            for fact in payload["facts"]
-        }
+        facts_by_relation = {fact["relation"]: fact for fact in payload["facts"]}
         invalid_fact = facts_by_relation["selects"]
         invalid_ref = invalid_fact["ref"]
         invalid_endpoint = copy.deepcopy(invalid_fact["value"]["target"])
         invalid_endpoint["source_system"] = "model_summary"
         invalid_fact["value"]["target"] = invalid_endpoint
-        facts_by_relation["scheduled_on"]["value"]["target"][
-            "source_system"
-        ] = "deepflow"
-        facts_by_relation["owns_container"]["value"]["target"][
-            "source_system"
-        ] = "kubernetes"
+        facts_by_relation["scheduled_on"]["value"]["target"]["source_system"] = "deepflow"
+        facts_by_relation["owns_container"]["value"]["target"]["source_system"] = "kubernetes"
 
         raw = common.dump_bounded_result(payload)
         published = json.loads(raw)
         records = published["fact_ledger"]["records"]
-        relations = {
-            record["value"]["relation"]
-            for record in records
-            if record["dimension"] == "topology"
-        }
-        retained_refs = {
-            ref
-            for record in records
-            for ref in record["evidence_refs"]
-        }
+        relations = {record["value"]["relation"] for record in records if record["dimension"] == "topology"}
+        retained_refs = {ref for record in records for ref in record["evidence_refs"]}
 
         self.assertFalse(published["serialization"]["response_truncated"])
         self.assertFalse(published["truncated"])
@@ -531,11 +494,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
 
     def test_rejected_fact_source_cannot_consume_exact_scope_anchor(self):
         payload = _max_identifier_topology_payload()
-        rejected_fact = next(
-            fact
-            for fact in payload["facts"]
-            if fact["relation"] == "selects"
-        )
+        rejected_fact = next(fact for fact in payload["facts"] if fact["relation"] == "selects")
         rejected_ref = rejected_fact["ref"]
         rejected_fact["source_system"] = "model_summary"
         original = copy.deepcopy(payload)
@@ -543,36 +502,16 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         raw = common.dump_bounded_result(payload)
         published = json.loads(raw)
         ledger = published["fact_ledger"]
-        records = [
-            record
-            for record in ledger["records"]
-            if record["dimension"] == "topology"
-        ]
+        records = [record for record in ledger["records"] if record["dimension"] == "topology"]
         relations = {record["value"]["relation"] for record in records}
-        retained_refs = {
-            ref
-            for record in records
-            for ref in record["evidence_refs"]
-        }
-        endpoints = {
-            record["value"][key]
-            for record in records
-            for key in ("source", "target")
-        }
+        retained_refs = {ref for record in records for ref in record["evidence_refs"]}
+        endpoints = {record["value"][key] for record in records for key in ("source", "target")}
         legal_relations = {"owned_by", "owns_container", "scheduled_on"}
-        fact_relations = {
-            fact["relation"] for fact in published["facts"]
-        }
+        fact_relations = {fact["relation"] for fact in published["facts"]}
         fact_refs = {fact["ref"] for fact in published["facts"]}
-        edge_relations = {
-            edge["relation"] for edge in published["edges"]
-        }
-        edge_refs = {
-            edge["evidence_ref"] for edge in published["edges"]
-        }
-        summary_relations = set(
-            published["topology_summary"]["relations"]
-        )
+        edge_relations = {edge["relation"] for edge in published["edges"]}
+        edge_refs = {edge["evidence_ref"] for edge in published["edges"]}
+        summary_relations = set(published["topology_summary"]["relations"])
 
         self.assertFalse(published["serialization"]["response_truncated"])
         self.assertEqual(payload, original)
@@ -618,22 +557,15 @@ class CanonicalFactLedgerTests(unittest.TestCase):
                     "trace_id": shared,
                     "directness": "direct",
                 },
-                *[
-                    _metric_fact(f"extra-{index}", value="z" * 1500)
-                    for index in range(5)
-                ],
+                *[_metric_fact(f"extra-{index}", value="z" * 1500) for index in range(5)],
             ],
         )
-        tracing_result["correlations"] = [
-            {"trace_id": shared, "basis": "exact_trace_id"}
-        ]
+        tracing_result["correlations"] = [{"trace_id": shared, "basis": "exact_trace_id"}]
 
         tracing_published = json.loads(common.dump_bounded_result(tracing_result))
         retained_refs = [fact["ref"] for fact in tracing_published["facts"]]
         ledger_refs = {
-            ref
-            for record in tracing_published["fact_ledger"]["records"]
-            for ref in record["evidence_refs"]
+            ref for record in tracing_published["fact_ledger"]["records"] for ref in record["evidence_refs"]
         }
         self.assertEqual(tracing_published["evidence_refs"], retained_refs)
         self.assertEqual(ledger_refs, set(retained_refs))
@@ -645,9 +577,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
             }
             self.assertEqual(sources, {"deepflow", "tempo"})
 
-        topology_published = json.loads(
-            common.dump_bounded_result(_max_identifier_topology_payload())
-        )
+        topology_published = json.loads(common.dump_bounded_result(_max_identifier_topology_payload()))
         topology_refs = {fact["ref"] for fact in topology_published["facts"]}
         self.assertEqual(set(topology_published["evidence_refs"]), topology_refs)
         self.assertEqual(
@@ -678,35 +608,16 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         self.assertFalse(result["truncated"])
         self.assertEqual(
             result["fact_ledger"]["scope_entity_ids"],
-            [
-                "k8s.pod:"
-                + ("n" * 63)
-                + "/"
-                + ("p" * 253)
-                + ":12345678-1234-1234-1234-123456789012"
-            ],
+            ["k8s.pod:" + ("n" * 63) + "/" + ("p" * 253) + ":12345678-1234-1234-1234-123456789012"],
         )
-        primary = next(
-            entity["entity_id"]
-            for entity in result["entities"]
-            if entity["kind"] == "Pod"
-        )
-        self.assertTrue(
-            any(
-                primary in {edge["source"], edge["target"]}
-                for edge in result["edges"]
-            )
-        )
+        primary = next(entity["entity_id"] for entity in result["entities"] if entity["kind"] == "Pod")
+        self.assertTrue(any(primary in {edge["source"], edge["target"]} for edge in result["edges"]))
         self.assertTrue(result["fact_ledger"]["records"])
 
     def test_lossless_topology_ledger_preserves_exact_scope_with_typed_alias(self):
         raw = common.dump_bounded_result(_max_identifier_topology_payload())
         result = json.loads(raw)
-        records = [
-            record
-            for record in result["fact_ledger"]["records"]
-            if record["dimension"] == "topology"
-        ]
+        records = [record for record in result["fact_ledger"]["records"] if record["dimension"] == "topology"]
         endpoints = {
             endpoint
             for record in records
@@ -717,9 +628,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         }
         self.assertFalse(result["serialization"]["response_truncated"])
         self.assertIn("k8s.pod:scope/current", endpoints)
-        self.assertTrue(
-            all(endpoint.startswith("k8s.") for endpoint in endpoints)
-        )
+        self.assertTrue(all(endpoint.startswith("k8s.") for endpoint in endpoints))
         self.assertEqual(
             {record["value"]["relation"] for record in records},
             {"owned_by", "selects", "scheduled_on", "owns_container"},
@@ -727,9 +636,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         self.assertEqual(len(records), 5)
 
     def test_compacted_topology_ledger_uses_typed_scope_connected_entities(self):
-        result = json.loads(
-            common.dump_bounded_result(_max_identifier_topology_payload())
-        )
+        result = json.loads(common.dump_bounded_result(_max_identifier_topology_payload()))
         scope_id = result["fact_ledger"]["scope_entity_ids"][0]
         records = result["fact_ledger"]["records"]
 
@@ -754,8 +661,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         self.assertTrue(records)
         self.assertTrue(
             all(
-                record["value"]["source"] in reachable
-                and record["value"]["target"] in reachable
+                record["value"]["source"] in reachable and record["value"]["target"] in reachable
                 for record in records
             )
         )
@@ -794,11 +700,7 @@ class CanonicalFactLedgerTests(unittest.TestCase):
             result["fact_ledger"]["scope_entity_ids"],
             [f"k8s.pod:{namespace}/{pod}:{current_uid}"],
         )
-        primary = next(
-            entity
-            for entity in result["entities"]
-            if entity["kind"] == "Pod"
-        )
+        primary = next(entity for entity in result["entities"] if entity["kind"] == "Pod")
         self.assertEqual(primary.get("uid"), current_uid)
 
     def _assert_tool_publication(self, tool_name, result):

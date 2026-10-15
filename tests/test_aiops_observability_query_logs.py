@@ -65,10 +65,13 @@ class LoggingQueryTests(unittest.TestCase):
 
     def test_rejects_wildcard_and_unsafe_source_fields(self):
         for fields in (["*"], ["event.*"], ["../secret"], ["field[0]"]):
-            with self.subTest(fields=fields), patch.object(
-                logs,
-                "_query_elasticsearch",
-            ) as backend:
+            with (
+                self.subTest(fields=fields),
+                patch.object(
+                    logs,
+                    "_query_elasticsearch",
+                ) as backend,
+            ):
                 result = logs.execute(
                     {
                         "namespace": "ns",
@@ -270,10 +273,7 @@ class LoggingQueryTests(unittest.TestCase):
                 }
             )
 
-        by_message = {
-            sample["message"]: sample
-            for sample in result["samples"]
-        }
+        by_message = {sample["message"]: sample for sample in result["samples"]}
         self.assertEqual(
             by_message["old pod incarnation"]["directness"],
             "related_context",
@@ -494,15 +494,9 @@ class LoggingQueryTests(unittest.TestCase):
                     "pod": entity["pod"],
                     "purpose": "verify whether selected log evidence changes the diagnosis",
                     "container": "api",
-                    "keywords": [
-                        f"keyword-{index}-" + ("k" * 108)
-                        for index in range(8)
-                    ],
+                    "keywords": [f"keyword-{index}-" + ("k" * 108) for index in range(8)],
                     "keyword_mode": "all",
-                    "levels": [
-                        f"level-{index}-" + ("l" * 24)
-                        for index in range(6)
-                    ],
+                    "levels": [f"level-{index}-" + ("l" * 24) for index in range(6)],
                     "trace_id": "0123456789abcdef0123456789abcdef",
                     "max_records": 50,
                 }
@@ -884,13 +878,16 @@ class LoggingQueryTests(unittest.TestCase):
 
         self.assertEqual(len(result["samples"]), 20)
         self.assertEqual(len(result["facts"]), 20)
-        self.assertEqual(result["counts"], {
-            "matched": 20,
-            "retrieved": 20,
-            "normalized": 20,
-            "returned": 20,
-            "dropped": 0,
-        })
+        self.assertEqual(
+            result["counts"],
+            {
+                "matched": 20,
+                "retrieved": 20,
+                "normalized": 20,
+                "returned": 20,
+                "dropped": 0,
+            },
+        )
         self.assertEqual(result["truncation"]["stages"], [])
 
 

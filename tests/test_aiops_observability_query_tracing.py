@@ -15,19 +15,19 @@ class TracingQueryTests(unittest.TestCase):
             "ns",
             "pod",
             [],
-            [{
-                "trace_id": trace_id,
-                "span_id": span_id,
-                "service": "api",
-                "name": "GET /ready",
-                "attributes": {"k8s.pod.name": "pod"},
-            }],
+            [
+                {
+                    "trace_id": trace_id,
+                    "span_id": span_id,
+                    "service": "api",
+                    "name": "GET /ready",
+                    "attributes": {"k8s.pod.name": "pod"},
+                }
+            ],
             pod_uid="",
         )
 
-        tempo_fact = next(
-            fact for fact in facts if fact["source_system"] == "tempo"
-        )
+        tempo_fact = next(fact for fact in facts if fact["source_system"] == "tempo")
         self.assertEqual(tempo_fact["trace_id"], trace_id)
         self.assertEqual(tempo_fact["span_id"], span_id)
 
@@ -167,10 +167,7 @@ class TracingQueryTests(unittest.TestCase):
         self.assertEqual(len(result["facts"]), 13)
         self.assertEqual(len(result["samples"]), 13)
         self.assertEqual(result["counts"]["returned"], 13)
-        fact_sources = {
-            fact["source_system"]
-            for fact in result["facts"]
-        }
+        fact_sources = {fact["source_system"] for fact in result["facts"]}
         self.assertIn("deepflow", fact_sources)
         self.assertIn("tempo", fact_sources)
         self.assertTrue(result["correlations"])
@@ -178,19 +175,11 @@ class TracingQueryTests(unittest.TestCase):
         retained_correlation = result["correlations"][0]["trace_id"]
         self.assertIn(
             retained_correlation,
-            {
-                fact["trace_id"]
-                for fact in result["facts"]
-                if fact["source_system"] == "deepflow"
-            },
+            {fact["trace_id"] for fact in result["facts"] if fact["source_system"] == "deepflow"},
         )
         self.assertIn(
             retained_correlation,
-            {
-                fact["trace_id"]
-                for fact in result["facts"]
-                if fact["source_system"] == "tempo"
-            },
+            {fact["trace_id"] for fact in result["facts"] if fact["source_system"] == "tempo"},
         )
         self.assertEqual(
             result["evidence_refs"],
@@ -385,12 +374,7 @@ class TracingQueryTests(unittest.TestCase):
         self.assertEqual(result["directness"], "related_context")
         self.assertEqual(result["flows"], [])
         self.assertEqual(result["spans"], spans)
-        self.assertTrue(
-            all(
-                fact["directness"] == "related_context"
-                for fact in result["facts"]
-            )
-        )
+        self.assertTrue(all(fact["directness"] == "related_context" for fact in result["facts"]))
         self.assertIn("Pod IP", result["limitations"][0])
 
     def test_explicit_trace_id_preserves_tempo_absent_coverage(self):
@@ -674,17 +658,19 @@ class TracingQueryTests(unittest.TestCase):
             "syscall_trace_id_request": "123",
             "syscall_trace_id_response": "123",
         }
-        spans = [{
-            "trace_id": trace_id,
-            "service": "trace-oom-api",
-            "name": "GET /allocate",
-            "attributes": {
-                "aiops.allocated_mib.before": 60,
-                "aiops.alloc_mib": 2,
-                "aiops.allocated_mib.after": 62,
-                "k8s.pod.name": "pod",
-            },
-        }]
+        spans = [
+            {
+                "trace_id": trace_id,
+                "service": "trace-oom-api",
+                "name": "GET /allocate",
+                "attributes": {
+                    "aiops.allocated_mib.before": 60,
+                    "aiops.alloc_mib": 2,
+                    "aiops.allocated_mib.after": 62,
+                    "k8s.pod.name": "pod",
+                },
+            }
+        ]
         deepflow_calls = []
 
         def query_deepflow(sql):
@@ -716,9 +702,7 @@ class TracingQueryTests(unittest.TestCase):
                 {
                     "namespace": "ns",
                     "pod": "pod",
-                    "purpose": (
-                        "check whether failed requests explain the Pod restart"
-                    ),
+                    "purpose": ("check whether failed requests explain the Pod restart"),
                     "response_codes": [500, 502, 503, 504],
                     "response_statuses": ["error"],
                     "max_records": 20,
@@ -748,12 +732,7 @@ class TracingQueryTests(unittest.TestCase):
         self.assertEqual(result["flows"][0]["request_resource"], "/allocate?mib=2")
         self.assertEqual(result["spans"], spans)
         self.assertEqual(result["correlations"][0]["basis"], "exact_trace_id")
-        self.assertTrue(
-            all(
-                fact["directness"] == "related_context"
-                for fact in result["facts"]
-            )
-        )
+        self.assertTrue(all(fact["directness"] == "related_context" for fact in result["facts"]))
         self.assertIn("original predicate", result["limitations"][0])
 
     def test_query_tempo_propagates_collector_coverage_query_and_error(self):
@@ -897,12 +876,14 @@ class TracingQueryTests(unittest.TestCase):
                 tracing,
                 "_query_deepflow",
                 return_value={
-                    "data": [{
-                        "time": "2026-07-21 00:10:00",
-                        "src_ip": "10.0.0.3",
-                        "dst_ip": "10.0.0.2",
-                        "trace_id": "0123456789abcdef0123456789abcdef",
-                    }]
+                    "data": [
+                        {
+                            "time": "2026-07-21 00:10:00",
+                            "src_ip": "10.0.0.3",
+                            "dst_ip": "10.0.0.2",
+                            "trace_id": "0123456789abcdef0123456789abcdef",
+                        }
+                    ]
                 },
             ),
             patch.object(
@@ -917,11 +898,13 @@ class TracingQueryTests(unittest.TestCase):
                 },
             ),
         ):
-            result = tracing.execute({
-                "namespace": "ns",
-                "pod": "pod",
-                "purpose": "verify trace backend availability",
-            })
+            result = tracing.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "verify trace backend availability",
+                }
+            )
 
         self.assertEqual(result["coverage"], "weak")
         self.assertEqual(result["telemetry"]["tempo"]["coverage"], "error")
@@ -932,12 +915,14 @@ class TracingQueryTests(unittest.TestCase):
             "ns",
             "pod",
             [],
-            [{
-                "trace_id": "0123456789abcdef0123456789abcdef",
-                "service": "peer",
-                "name": "GET /peer",
-                "attributes": {"k8s.pod.name": "other-pod"},
-            }],
+            [
+                {
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "service": "peer",
+                    "name": "GET /peer",
+                    "attributes": {"k8s.pod.name": "other-pod"},
+                }
+            ],
             pod_uid="uid-1",
         )
 
@@ -1000,24 +985,15 @@ class TracingQueryTests(unittest.TestCase):
                 }
             )
 
-        tempo_fact = next(
-            fact for fact in result["facts"]
-            if fact["source_system"] == "tempo"
-        )
+        tempo_fact = next(fact for fact in result["facts"] if fact["source_system"] == "tempo")
         self.assertEqual(tempo_fact.get("pod_uid"), "uid-old")
         self.assertEqual(tempo_fact["directness"], "related_context")
         published = json.loads(common.dump_bounded_result(result))
         self.assertFalse(
-            any(
-                record["source_system"] == "tempo"
-                for record in published["fact_ledger"]["records"]
-            )
+            any(record["source_system"] == "tempo" for record in published["fact_ledger"]["records"])
         )
         self.assertTrue(
-            any(
-                record["source_system"] == "deepflow"
-                for record in published["fact_ledger"]["records"]
-            )
+            any(record["source_system"] == "deepflow" for record in published["fact_ledger"]["records"])
         )
         self.assertEqual(published["correlations"], [])
 

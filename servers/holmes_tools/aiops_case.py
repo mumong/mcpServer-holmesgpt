@@ -93,7 +93,9 @@ def _run_collect_aiops_case(arguments: dict[str, Any]) -> str:
     namespace = str(arguments.get("namespace") or "").strip()
     scenario = str(arguments.get("scenario") or "auto").strip() or "auto"
     case_id = str(arguments.get("case_id") or f"{scenario}-{namespace or 'cluster'}-{pod}").strip()
-    payload = collect_case({**arguments, "namespace": namespace, "pod": pod, "scenario": scenario, "case_id": case_id})
+    payload = collect_case(
+        {**arguments, "namespace": namespace, "pod": pod, "scenario": scenario, "case_id": case_id}
+    )
     return _json(payload)
 
 
@@ -119,7 +121,9 @@ def _run_get_aiops_case_evidence(arguments: dict[str, Any]) -> str:
     try:
         evidence_ref = str(arguments.get("evidence_ref") or "")
         max_bytes = int(arguments.get("max_bytes") or 12000)
-        return _json(get_evidence(_cases_dir(), str(arguments.get("case_id") or ""), evidence_ref, max_bytes=max_bytes))
+        return _json(
+            get_evidence(_cases_dir(), str(arguments.get("case_id") or ""), evidence_ref, max_bytes=max_bytes)
+        )
     except Exception as exc:
         return _json({"ok": False, "error": str(exc)})
 
@@ -152,13 +156,22 @@ TOOLS: List[Tool] = [
         ),
         inputSchema=_schema(
             {
-                "namespace": {"type": "string", "description": "Kubernetes namespace. Optional only when pod name is cluster-unique."},
+                "namespace": {
+                    "type": "string",
+                    "description": "Kubernetes namespace. Optional only when pod name is cluster-unique.",
+                },
                 "pod": {"type": "string", "description": "Abnormal Pod name."},
-                "scenario": {"type": "string", "description": "auto, oomkilled, pod_terminating, or another supported scenario."},
+                "scenario": {
+                    "type": "string",
+                    "description": "auto, oomkilled, pod_terminating, or another supported scenario.",
+                },
                 "case_id": {"type": "string", "description": "Optional stable case id."},
                 "start": {"type": "string", "description": "Optional ISO collection start."},
                 "end": {"type": "string", "description": "Optional ISO collection end."},
-                "window_minutes": {"type": "integer", "description": "Optional collection window in minutes."},
+                "window_minutes": {
+                    "type": "integer",
+                    "description": "Optional collection window in minutes.",
+                },
             },
             ["pod"],
         ),
@@ -174,7 +187,10 @@ TOOLS: List[Tool] = [
         inputSchema=_schema(
             {
                 "case_id": {"type": "string"},
-                "evidence_ref": {"type": "string", "description": "Evidence id or package-relative evidence path."},
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Evidence id or package-relative evidence path.",
+                },
                 "max_bytes": {"type": "integer", "description": "Maximum bytes for file content."},
             },
             ["case_id", "evidence_ref"],

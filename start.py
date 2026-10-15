@@ -43,7 +43,7 @@ MONITOR_INTERVAL_SECONDS = 1.0
 
 class MCPServerManager:
     """MCP Server 管理器"""
-    
+
     def __init__(self, config_path: str):
         self.config_path = Path(config_path)
         self.processes: List[Tuple[str, subprocess.Popen]] = []  # (name, process)
@@ -54,11 +54,11 @@ class MCPServerManager:
         self._backoff: Dict[str, float] = {}
         self._started_at: Dict[str, float] = {}
         self._pending_restart: Dict[str, float] = {}  # name -> 计划重启的 monotonic 时间
-    
+
     def _stream_output(self, name: str, process: subprocess.Popen):
         """读取并记录子进程的输出"""
         try:
-            for line in iter(process.stdout.readline, ''):
+            for line in iter(process.stdout.readline, ""):
                 if line:
                     logger.info("[%s] %s", name, line.rstrip())
                 if process.poll() is not None:
@@ -66,77 +66,77 @@ class MCPServerManager:
         except (OSError, ValueError):
             # 管道在进程退出/终止时关闭
             pass
-        
+
     def load_config(self) -> bool:
         """加载配置文件"""
         if not self.config_path.exists():
             logger.error("配置文件不存在: %s", self.config_path)
             return False
-        
+
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
+            with open(self.config_path, "r", encoding="utf-8") as f:
                 self.config = yaml.safe_load(f) or {}
             return True
         except (OSError, yaml.YAMLError) as e:
             logger.error("配置文件解析失败: %s", e)
             return False
-    
+
     def list_servers(self):
         """列出所有配置的服务（CLI 报告输出到 stdout）"""
         if not self.load_config():
             return
-        
+
         print("\n📋 MCP Server 配置列表\n")
         print("=" * 60)
-        
+
         # 第三方包 (npm / uv)
-        customer_servers = self.config.get('customermcp', []) or []
+        customer_servers = self.config.get("customermcp", []) or []
         if customer_servers:
             print("\n🌐 第三方 MCP 包:")
             for server in customer_servers:
-                status = "✅" if server.get('enabled', True) else "⏸️"
-                pkg_type = server.get('type', 'npm')
+                status = "✅" if server.get("enabled", True) else "⏸️"
+                pkg_type = server.get("type", "npm")
                 print(f"  {status} {server.get('name', 'unnamed')} [{pkg_type}]")
                 print(f"     包: {server.get('package')}")
-                if pkg_type == 'uv':
+                if pkg_type == "uv":
                     print(f"     目录: {server.get('directory')}")
                 print(f"     端口: {server.get('port')}")
-        
+
         # 本地自定义
-        basic_servers = self.config.get('basicmcp', []) or []
+        basic_servers = self.config.get("basicmcp", []) or []
         if basic_servers:
             print("\n🏠 本地 MCP (自定义):")
             for server in basic_servers:
-                status = "✅" if server.get('enabled', True) else "⏸️"
+                status = "✅" if server.get("enabled", True) else "⏸️"
                 print(f"  {status} {server.get('name', 'unnamed')}")
                 print(f"     路径: {server.get('path')}")
                 print(f"     端口: {server.get('port')}")
-        
+
         print("\n" + "=" * 60)
         print("✅ = 已启用  ⏸️ = 已禁用")
-    
+
     def start_package_server(self, server: Dict) -> Tuple[str, subprocess.Popen]:
         """启动第三方 MCP Server (支持 npm / uv)"""
-        name = server.get('name', 'unnamed')
-        package = server.get('package')
-        port = server.get('port')
-        pkg_type = server.get('type', 'npm')  # 默认 npm
-        env_vars = server.get('env', {})
-        
+        name = server.get("name", "unnamed")
+        package = server.get("package")
+        port = server.get("port")
+        pkg_type = server.get("type", "npm")  # 默认 npm
+        env_vars = server.get("env", {})
+
         if not package or not port:
             logger.error("%s: 缺少 package 或 port 配置", name)
             return None
-        
+
         # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
         env = build_server_environment(os.environ, port, env_vars)
-        
+
         # 优先使用镜像内预装的 mcp-proxy，避免 npx 并发安装
         proxy_available = bool(shutil.which("mcp-proxy"))
-        
+
         # 根据类型构建内部命令
-        if pkg_type == 'uv':
+        if pkg_type == "uv":
             # uv 类型: uv --directory <dir> run <package>
-            directory = server.get('directory')
+            directory = server.get("directory")
             if not directory:
                 logger.error("%s: uv 类型必须配置 directory", name)
                 return None
@@ -144,37 +144,40 @@ class MCPServerManager:
         else:
             # npm 类型: npx -y <package>
             inner_cmd = f"npx -y {package}"
-        
+
         # 使用 mcp-proxy (支持更好的连接管理和重连)
         cmd = build_proxy_command(port, inner_cmd, proxy_available=proxy_available)
-        
+
         logger.info(
             "%s: 启动中 [%s] 包=%s%s 端口=%s SSE=http://localhost:%s/sse",
-            name, pkg_type, package,
-            f" 目录={server.get('directory')}" if pkg_type == 'uv' else "",
-            port, port,
+            name,
+            pkg_type,
+            package,
+            f" 目录={server.get('directory')}" if pkg_type == "uv" else "",
+            port,
+            port,
         )
-        
+
         return self._spawn_server(name, cmd, env)
-    
+
     def start_local_server(self, server: Dict) -> Tuple[str, subprocess.Popen]:
         """启动本地自定义 MCP Server"""
-        name = server.get('name', 'unnamed')
-        path = server.get('path')
-        port = server.get('port')
-        env_vars = server.get('env', {})
-        
+        name = server.get("name", "unnamed")
+        path = server.get("path")
+        port = server.get("port")
+        env_vars = server.get("env", {})
+
         if not path or not port:
             logger.error("%s: 缺少 path 或 port 配置", name)
             return None
-        
+
         # 检查文件是否存在
         script_path = Path(path)
         if not script_path.is_absolute():
             # 优先从工作目录查找，其次从配置文件目录查找
             work_dir_path = Path(__file__).parent / path
             config_dir_path = self.config_path.parent / path
-            
+
             if work_dir_path.exists():
                 script_path = work_dir_path
             elif config_dir_path.exists():
@@ -182,25 +185,29 @@ class MCPServerManager:
             else:
                 logger.error(
                     "%s: 脚本不存在 - %s (尝试路径: %s, %s)",
-                    name, path, work_dir_path, config_dir_path,
+                    name,
+                    path,
+                    work_dir_path,
+                    config_dir_path,
                 )
                 return None
-        
+
         # 准备环境变量（每进程独立 npm 缓存，避免多进程并发安装时缓存冲突）
         env = build_server_environment(os.environ, port, env_vars)
-        
+
         # 优先使用镜像内预装的 mcp-proxy，避免 npx 并发安装
         proxy_available = bool(shutil.which("mcp-proxy"))
         # 构建命令 (使用当前 Python 解释器 sys.executable，兼容仅有 python3 的环境)
-        cmd = build_proxy_command(
-            port, f"{sys.executable} {script_path}", proxy_available=proxy_available
-        )
-        
+        cmd = build_proxy_command(port, f"{sys.executable} {script_path}", proxy_available=proxy_available)
+
         logger.info(
             "%s: 启动中 路径=%s 端口=%s SSE=http://localhost:%s/sse",
-            name, script_path, port, port,
+            name,
+            script_path,
+            port,
+            port,
         )
-        
+
         return self._spawn_server(name, cmd, env)
 
     def _spawn_server(self, name: str, cmd: str, env: Dict[str, str]):
@@ -213,7 +220,7 @@ class MCPServerManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
             )
             # 启动输出读取线程
             threading.Thread(target=self._stream_output, args=(name, process), daemon=True).start()
@@ -229,8 +236,8 @@ class MCPServerManager:
 
         logger.info("MCP Server 统一启动器")
         started_count = 0
-        customer_servers = self.config.get('customermcp', []) or []
-        basic_servers = self.config.get('basicmcp', []) or []
+        customer_servers = self.config.get("customermcp", []) or []
+        basic_servers = self.config.get("basicmcp", []) or []
         groups = (
             ("第三方 MCP Server", customer_servers, self.start_package_server),
             ("本地 MCP Server", basic_servers, self.start_local_server),
@@ -239,8 +246,8 @@ class MCPServerManager:
             if servers:
                 logger.info("启动%s...", label)
             for server in servers:
-                if not server.get('enabled', True):
-                    logger.info("%s: 已跳过 (disabled)", server.get('name', 'unnamed'))
+                if not server.get("enabled", True):
+                    logger.info("%s: 已跳过 (disabled)", server.get("name", "unnamed"))
                     continue
                 process = starter(server)
                 if process:
@@ -255,10 +262,11 @@ class MCPServerManager:
 
         logger.info("已启动 %d 个 MCP Server", started_count)
         for server in customer_servers + basic_servers:
-            if server.get('enabled', True):
+            if server.get("enabled", True):
                 logger.info(
                     "SSE 端点: %s -> http://localhost:%s/sse",
-                    server.get('name', 'unnamed'), server.get('port'),
+                    server.get("name", "unnamed"),
+                    server.get("port"),
                 )
         logger.info("按 Ctrl+C 停止所有服务")
 
@@ -267,6 +275,7 @@ class MCPServerManager:
 
     def _wait_for_exit(self):
         """等待退出信号，并监控/重启子进程"""
+
         def signal_handler(sig, frame):
             self._stop_flag = True
             logger.info("正在停止所有服务...")
@@ -349,19 +358,13 @@ def main():
   python start.py                         # 启动所有配置的服务
   python start.py --config my.yaml        # 使用指定配置
   python start.py --list                  # 列出配置的服务
-        """
+        """,
     )
     parser.add_argument(
-        "--config", "-c",
-        default="config/mcp_config.yaml",
-        help="配置文件路径 (默认: config/mcp_config.yaml)"
+        "--config", "-c", default="config/mcp_config.yaml", help="配置文件路径 (默认: config/mcp_config.yaml)"
     )
-    parser.add_argument(
-        "--list", "-l",
-        action="store_true",
-        help="列出所有配置的服务"
-    )
-    
+    parser.add_argument("--list", "-l", action="store_true", help="列出所有配置的服务")
+
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=LOG_FORMAT)
 
@@ -369,9 +372,9 @@ def main():
     config_path = args.config
     if not Path(config_path).is_absolute():
         config_path = Path(__file__).parent / config_path
-    
+
     manager = MCPServerManager(str(config_path))
-    
+
     if args.list:
         manager.list_servers()
     else:

@@ -34,75 +34,57 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "format": {
-                        "type": "string",
-                        "description": "时间格式 (默认: %Y-%m-%d %H:%M:%S)"
-                    }
-                }
-            }
+                    "format": {"type": "string", "description": "时间格式 (默认: %Y-%m-%d %H:%M:%S)"}
+                },
+            },
         ),
         Tool(
             name="echo",
             description="回显输入的消息",
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "要回显的消息"
-                    }
-                },
-                "required": ["message"]
-            }
+                "properties": {"message": {"type": "string", "description": "要回显的消息"}},
+                "required": ["message"],
+            },
         ),
         Tool(
             name="test_tool",
             description="只有当用户需要测试的时候才运行这个测试工具",
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "test_param": {
-                        "type": "string",
-                        "description": "测试参数"
-                    }
-                },
-                "required": ["test_param"]
-            }
-        ),  
+                "properties": {"test_param": {"type": "string", "description": "测试参数"}},
+                "required": ["test_param"],
+            },
+        ),
         Tool(
             name="calculate",
             description="简单计算器",
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "数学表达式 (如: 1+2*3)"
-                    }
-                },
-                "required": ["expression"]
-            }
-        )
+                "properties": {"expression": {"type": "string", "description": "数学表达式 (如: 1+2*3)"}},
+                "required": ["expression"],
+            },
+        ),
     ]
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """处理工具调用"""
-    
+
     if name == "get_time":
         fmt = arguments.get("format", "%Y-%m-%d %H:%M:%S")
         result = datetime.now().strftime(fmt)
         return [TextContent(type="text", text=result)]
-    
+
     elif name == "echo":
         message = arguments.get("message", "")
         return [TextContent(type="text", text=f"Echo: {message}")]
-    
+
     elif name == "test_tool":
         user_input = arguments.get("test_param", "")
         return [TextContent(type="text", text=f"这是测试: {user_input} 运行成功")]
-    
+
     elif name == "calculate":
         expr = arguments.get("expression", "0")
         try:
@@ -115,7 +97,7 @@ async def call_tool(name: str, arguments: dict):
                 return [TextContent(type="text", text="错误: 不允许的字符")]
         except Exception as e:
             return [TextContent(type="text", text=f"错误: {e}")]
-    
+
     return [TextContent(type="text", text=f"未知工具: {name}")]
 
 
@@ -127,4 +109,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

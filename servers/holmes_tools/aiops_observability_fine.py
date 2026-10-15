@@ -61,7 +61,13 @@ def _resolve_entity(arguments: dict[str, Any]) -> str:
 
 def _query_k8s(arguments: dict[str, Any]) -> str:
     cfg = get_config()
-    return _json(collect_kubernetes(str(arguments.get("namespace") or ""), str(arguments.get("pod") or ""), timeout=cfg.timeout_seconds).to_payload())
+    return _json(
+        collect_kubernetes(
+            str(arguments.get("namespace") or ""),
+            str(arguments.get("pod") or ""),
+            timeout=cfg.timeout_seconds,
+        ).to_payload()
+    )
 
 
 def _query_metrics(arguments: dict[str, Any]) -> str:
@@ -109,8 +115,8 @@ def _query_deepflow(arguments: dict[str, Any]) -> str:
     pod = str(arguments.get("pod") or "")
     window = _window(arguments)
     pod_json, _ = get_pod(namespace, pod, timeout=cfg.timeout_seconds)
-    status = ((pod_json or {}).get("status") or {})
-    spec = ((pod_json or {}).get("spec") or {})
+    status = (pod_json or {}).get("status") or {}
+    spec = (pod_json or {}).get("spec") or {}
     return _json(
         collect_deepflow(
             clickhouse_url=cfg.deepflow_clickhouse_url,
@@ -128,7 +134,13 @@ def _query_deepflow(arguments: dict[str, Any]) -> str:
 
 
 def _build_topology(arguments: dict[str, Any]) -> str:
-    summary = collect_case({**arguments, "case_id": arguments.get("case_id") or f"fine-topology-{arguments.get('namespace')}-{arguments.get('pod')}"})
+    summary = collect_case(
+        {
+            **arguments,
+            "case_id": arguments.get("case_id")
+            or f"fine-topology-{arguments.get('namespace')}-{arguments.get('pod')}",
+        }
+    )
     if not summary.get("ok"):
         return _json(summary)
     return _json(

@@ -28,13 +28,17 @@ def build_topology(
     edges: list[dict[str, Any]] = []
 
     _add_pod_structure(entities, edges, primary, pod_id, record, evidence_refs_by_dimension)
-    _add_evidence_observers(entities, edges, namespace, pod_id, primary.get("node"), evidence_refs_by_dimension, deepflow_coverage)
+    _add_evidence_observers(
+        entities, edges, namespace, pod_id, primary.get("node"), evidence_refs_by_dimension, deepflow_coverage
+    )
     k8s_refs = evidence_refs_by_dimension.get("k8s", [])[:5]
     _add_owner_chain(entities, edges, namespace, pod_id, record, k8s_refs)
     _add_services(entities, edges, namespace, pod_id, record, k8s_refs)
     tracing_refs = evidence_refs_by_dimension.get("tracing", [])[:5]
     resolved_caller_ips = _add_resolved_callers(entities, edges, pod_id, resolved_callers, tracing_refs)
-    _add_deepflow_peers(entities, edges, pod_id, primary.get("pod_ip"), deepflow_peers, resolved_caller_ips, tracing_refs)
+    _add_deepflow_peers(
+        entities, edges, pod_id, primary.get("pod_ip"), deepflow_peers, resolved_caller_ips, tracing_refs
+    )
 
     summary = summarize_topology(entities, edges)
     return entities, edges, summary
@@ -93,19 +97,40 @@ def _add_pod_structure(
     node = primary.get("node")
     if node:
         node_id = entity_id("node", None, node)
-        entities.append({"entity_id": node_id, "kind": "Node", "name": node, "attributes": {}, "evidence_refs": k8s_refs()})
+        entities.append(
+            {
+                "entity_id": node_id,
+                "kind": "Node",
+                "name": node,
+                "attributes": {},
+                "evidence_refs": k8s_refs(),
+            }
+        )
         edges.append(_edge(pod_id, node_id, "scheduled_on", "kubernetes", "direct", "high", k8s_refs()))
 
     pod_ip = primary.get("pod_ip")
     if pod_ip:
         ip_id = entity_id("ip", None, pod_ip)
-        entities.append({"entity_id": ip_id, "kind": "IP", "name": pod_ip, "attributes": {}, "evidence_refs": k8s_refs()})
+        entities.append(
+            {"entity_id": ip_id, "kind": "IP", "name": pod_ip, "attributes": {}, "evidence_refs": k8s_refs()}
+        )
         edges.append(_edge(pod_id, ip_id, "assigned_to", "kubernetes", "direct", "high", k8s_refs()))
 
     for container in record.get("containers") or []:
         container_id = entity_id("container", namespace, f"{pod_name}/{container}")
-        entities.append({"entity_id": container_id, "kind": "Container", "namespace": namespace, "name": container, "attributes": {}, "evidence_refs": k8s_refs()})
-        edges.append(_edge(pod_id, container_id, "owns_container", "kubernetes", "direct", "high", k8s_refs()))
+        entities.append(
+            {
+                "entity_id": container_id,
+                "kind": "Container",
+                "namespace": namespace,
+                "name": container,
+                "attributes": {},
+                "evidence_refs": k8s_refs(),
+            }
+        )
+        edges.append(
+            _edge(pod_id, container_id, "owns_container", "kubernetes", "direct", "high", k8s_refs())
+        )
 
 
 def _add_evidence_observers(
@@ -120,18 +145,65 @@ def _add_evidence_observers(
     """Evidence entities (metrics, logs, tracing) observing the Pod."""
     if evidence_refs_by_dimension.get("metrics"):
         evidence_id = entity_id("evidence", namespace, "prometheus-metrics")
-        entities.append({"entity_id": evidence_id, "kind": "Evidence", "namespace": namespace, "name": "prometheus-metrics", "attributes": {"dimension": "metrics"}, "evidence_refs": evidence_refs_by_dimension["metrics"][:5]})
-        edges.append(_edge(evidence_id, pod_id, "observes", "prometheus", "direct", "high", evidence_refs_by_dimension["metrics"][:5]))
+        entities.append(
+            {
+                "entity_id": evidence_id,
+                "kind": "Evidence",
+                "namespace": namespace,
+                "name": "prometheus-metrics",
+                "attributes": {"dimension": "metrics"},
+                "evidence_refs": evidence_refs_by_dimension["metrics"][:5],
+            }
+        )
+        edges.append(
+            _edge(
+                evidence_id,
+                pod_id,
+                "observes",
+                "prometheus",
+                "direct",
+                "high",
+                evidence_refs_by_dimension["metrics"][:5],
+            )
+        )
 
     if evidence_refs_by_dimension.get("logs"):
         evidence_id = entity_id("evidence", namespace, "logs")
-        entities.append({"entity_id": evidence_id, "kind": "Evidence", "namespace": namespace, "name": "logs", "attributes": {"dimension": "logs"}, "evidence_refs": evidence_refs_by_dimension["logs"][:5]})
-        edges.append(_edge(evidence_id, pod_id, "observes", "logs", "direct", "medium", evidence_refs_by_dimension["logs"][:5]))
+        entities.append(
+            {
+                "entity_id": evidence_id,
+                "kind": "Evidence",
+                "namespace": namespace,
+                "name": "logs",
+                "attributes": {"dimension": "logs"},
+                "evidence_refs": evidence_refs_by_dimension["logs"][:5],
+            }
+        )
+        edges.append(
+            _edge(
+                evidence_id,
+                pod_id,
+                "observes",
+                "logs",
+                "direct",
+                "medium",
+                evidence_refs_by_dimension["logs"][:5],
+            )
+        )
 
     if evidence_refs_by_dimension.get("tracing"):
         evidence_id = entity_id("evidence", namespace, "deepflow")
         present = deepflow_coverage == "present"
-        entities.append({"entity_id": evidence_id, "kind": "Evidence", "namespace": namespace, "name": "deepflow", "attributes": {"dimension": "tracing"}, "evidence_refs": evidence_refs_by_dimension["tracing"][:5]})
+        entities.append(
+            {
+                "entity_id": evidence_id,
+                "kind": "Evidence",
+                "namespace": namespace,
+                "name": "deepflow",
+                "attributes": {"dimension": "tracing"},
+                "evidence_refs": evidence_refs_by_dimension["tracing"][:5],
+            }
+        )
         edges.append(
             _edge(
                 evidence_id,
@@ -161,7 +233,16 @@ def _add_owner_chain(
         if not oname:
             continue
         oid = entity_id(okind, namespace, oname)
-        entities.append({"entity_id": oid, "kind": okind, "namespace": namespace, "name": oname, "attributes": {}, "evidence_refs": k8s_refs})
+        entities.append(
+            {
+                "entity_id": oid,
+                "kind": okind,
+                "namespace": namespace,
+                "name": oname,
+                "attributes": {},
+                "evidence_refs": k8s_refs,
+            }
+        )
         edges.append(_edge(owner_source, oid, "owned_by", "kubernetes", "direct", "high", k8s_refs))
         owner_source = oid
 
@@ -236,15 +317,25 @@ def _add_deepflow_peers(
 ) -> None:
     """Unresolved network peers remain weak related context."""
     seen_peers: set[str] = set()
-    for peer_ip in (deepflow_peers or []):
+    for peer_ip in deepflow_peers or []:
         if not peer_ip or peer_ip == pod_ip or peer_ip in resolved_caller_ips or peer_ip in seen_peers:
             continue
         seen_peers.add(peer_ip)
         if len(seen_peers) > 10:
             break
         peer_id = entity_id("ip", None, peer_ip)
-        entities.append({"entity_id": peer_id, "kind": "IP", "name": peer_ip, "attributes": {"role": "deepflow_peer"}, "evidence_refs": tracing_refs})
-        edges.append(_edge(peer_id, pod_id, "communicates_with", "deepflow", "related_context", "weak", tracing_refs))
+        entities.append(
+            {
+                "entity_id": peer_id,
+                "kind": "IP",
+                "name": peer_ip,
+                "attributes": {"role": "deepflow_peer"},
+                "evidence_refs": tracing_refs,
+            }
+        )
+        edges.append(
+            _edge(peer_id, pod_id, "communicates_with", "deepflow", "related_context", "weak", tracing_refs)
+        )
 
 
 def summarize_topology(entities: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
@@ -265,11 +356,7 @@ def topology_details(
     max_entities: int = 12,
     max_edges: int = 12,
 ) -> dict[str, Any]:
-    entity_lookup = {
-        str(item.get("entity_id")): item
-        for item in entities
-        if item.get("entity_id")
-    }
+    entity_lookup = {str(item.get("entity_id")): item for item in entities if item.get("entity_id")}
     entity_samples = [
         {
             "entity_id": item.get("entity_id"),

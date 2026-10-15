@@ -45,7 +45,11 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
 
     k8s = collect_kubernetes(namespace, pod, timeout=cfg.timeout_seconds)
     if k8s.coverage == "error" and not k8s.records:
-        return {"ok": False, "error": k8s.error or "kubernetes collection failed", "runtime_status": runtime_status()}
+        return {
+            "ok": False,
+            "error": k8s.error or "kubernetes collection failed",
+            "runtime_status": runtime_status(),
+        }
 
     k8s_record = k8s.records[0] if k8s.records else {}
     namespace = namespace or str(k8s_record.get("namespace") or "")
@@ -92,15 +96,19 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
     # 用专门的 DISTINCT 查询发现全量 trace_id（含成功 trace）+ caller IP（谁调用了本 Pod）
-    correlation = discover_correlation(
-        get_config(), cfg.deepflow_clickhouse_database, primary.get("pod_ip") or "",
-        window.start, window.end, cfg.timeout_seconds,
-    ) if primary.get("pod_ip") else {"trace_ids": [], "caller_ips": []}
-    flow_trace_ids = [
-        str(row.get("trace_id"))
-        for row in (deepflow.records or [])
-        if row.get("trace_id")
-    ]
+    correlation = (
+        discover_correlation(
+            get_config(),
+            cfg.deepflow_clickhouse_database,
+            primary.get("pod_ip") or "",
+            window.start,
+            window.end,
+            cfg.timeout_seconds,
+        )
+        if primary.get("pod_ip")
+        else {"trace_ids": [], "caller_ips": []}
+    )
+    flow_trace_ids = [str(row.get("trace_id")) for row in (deepflow.records or []) if row.get("trace_id")]
     discovered_trace_ids = _merge_trace_ids(
         flow_trace_ids,
         list(correlation.get("trace_ids") or []),
@@ -108,7 +116,11 @@ def collect_case(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
     tempo = collect_tempo(
-        namespace=namespace, pod=pod, trace_ids=discovered_trace_ids, timeout=cfg.timeout_seconds, max_traces=12
+        namespace=namespace,
+        pod=pod,
+        trace_ids=discovered_trace_ids,
+        timeout=cfg.timeout_seconds,
+        max_traces=12,
     )
 
     # request_driver：把 caller IP 解析成 pod，采它的日志（谁驱动了这次异常）
@@ -128,22 +140,13 @@ _ALLOCATED_MIB_RE = re.compile(r'allocated_mib["\s:=]+(\d+)', re.IGNORECASE)
 
 def _merge_trace_ids(*groups: list[str], limit: int = 20) -> list[str]:
     normalized_groups = [
-        [
-            trace_id
-            for trace_id in dict.fromkeys(
-                str(value or "").strip()
-                for value in group
-            )
-            if trace_id
-        ]
+        [trace_id for trace_id in dict.fromkeys(str(value or "").strip() for value in group) if trace_id]
         for group in groups
     ]
     merged: list[str] = []
     for index, group in enumerate(normalized_groups):
         remaining_groups = sum(
-            1
-            for later in normalized_groups[index + 1:]
-            if any(value not in merged for value in later)
+            1 for later in normalized_groups[index + 1 :] if any(value not in merged for value in later)
         )
         current_budget = max(0, limit - len(merged) - remaining_groups)
         for value in group:
@@ -185,8 +188,15 @@ def _trace_ids_from_evidence(sources: list[SourceResult]) -> list[str]:
 def _resolve_ip_to_pod(ip: str, timeout: int = 20) -> tuple[str, str] | None:
     """Resolve a Pod IP to (namespace, pod_name) via kubectl (cluster-wide)."""
     ok, out, _ = _kube.run_kubectl(
-        ["get", "pod", "-A", "--field-selector", f"status.podIP={ip}",
-         "-o", "jsonpath={.items[0].metadata.namespace}/{.items[0].metadata.name}"],
+        [
+            "get",
+            "pod",
+            "-A",
+            "--field-selector",
+            f"status.podIP={ip}",
+            "-o",
+            "jsonpath={.items[0].metadata.namespace}/{.items[0].metadata.name}",
+        ],
         timeout=timeout,
     )
     if ok and out.strip() and "/" in out:
@@ -207,9 +217,13 @@ def _collect_caller_logs(cfg: Any, caller_ips: list[str], window: Any) -> Source
         result = collect_elasticsearch(
             elasticsearch_url=cfg.elasticsearch_url,
             index=cfg.elasticsearch_index,
-            namespace=ns, pod=name, pod_uid=None,
-            start=window.start, end=window.end,
-            timeout=cfg.timeout_seconds, max_records=cfg.max_records,
+            namespace=ns,
+            pod=name,
+            pod_uid=None,
+            start=window.start,
+            end=window.end,
+            timeout=cfg.timeout_seconds,
+            max_records=cfg.max_records,
         )
         if result.coverage == "present" and result.records:
             # Retag as request_driver caller evidence.
@@ -234,7 +248,9 @@ def _write_package(
 ) -> None:
     evidence_records = _evidence_records(sources)
     refs_by_dimension = _recommended_refs_by_dimension(evidence_records)
-    k8s_record = next((source.records[0] for source in sources if source.dimension == "k8s" and source.records), {})
+    k8s_record = next(
+        (source.records[0] for source in sources if source.dimension == "k8s" and source.records), {}
+    )
     deepflow = next((source for source in sources if source.source_system == "deepflow"), None)
     pod_ip = primary.get("pod_ip")
     deepflow_peers = _deepflow_peer_ips(
@@ -272,7 +288,8 @@ def _write_package(
     if coverage.get("logs") in (None, "empty", "absent"):
         k8s_has_logs = any(
             ev.dimension == "logs" and (ev.payload or {}).get("log_preview")
-            for src in sources if src.dimension == "k8s"
+            for src in sources
+            if src.dimension == "k8s"
             for ev in src.evidence
         )
         if k8s_has_logs:
@@ -299,14 +316,20 @@ def _write_package(
         + _records_for_dimension(evidence_records, "caller_logs"),
     )
     write_jsonl(case_dir / "evidence" / "deepflow_l4.jsonl", [])
-    write_jsonl(case_dir / "evidence" / "deepflow_l7.jsonl", _records_for_dimension(evidence_records, "tracing"))
-    write_jsonl(case_dir / "evidence" / "tempo_traces.jsonl", _records_for_dimension(evidence_records, "trace"))
+    write_jsonl(
+        case_dir / "evidence" / "deepflow_l7.jsonl", _records_for_dimension(evidence_records, "tracing")
+    )
+    write_jsonl(
+        case_dir / "evidence" / "tempo_traces.jsonl", _records_for_dimension(evidence_records, "trace")
+    )
     write_jsonl(case_dir / "evidence" / "k8s_events.jsonl", _records_for_dimension(evidence_records, "k8s"))
     (case_dir / "evidence").mkdir(parents=True, exist_ok=True)
     k8s = next((source for source in sources if source.dimension == "k8s"), None)
     if k8s:
         meta = k8s.query_meta
-        (case_dir / "evidence" / "k8s_describe.txt").write_text(str(meta.get("describe") or ""), encoding="utf-8")
+        (case_dir / "evidence" / "k8s_describe.txt").write_text(
+            str(meta.get("describe") or ""), encoding="utf-8"
+        )
         (case_dir / "evidence" / "k8s_pod.yaml").write_text(str(meta.get("pod_yaml") or ""), encoding="utf-8")
 
 
@@ -328,7 +351,9 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
     timeline = read_jsonl(case_dir / "timeline.jsonl", limit=12)
     entities = read_jsonl(case_dir / "entities.jsonl")
     topology = read_jsonl(case_dir / "topology.jsonl")
-    refs_by_dimension = case.get("recommended_refs_by_dimension") or _recommended_refs_by_dimension(_all_evidence_records(case_dir))
+    refs_by_dimension = case.get("recommended_refs_by_dimension") or _recommended_refs_by_dimension(
+        _all_evidence_records(case_dir)
+    )
     dimension_details = _build_dimension_details(case_dir, case.get("coverage", {}), entities, topology)
     return {
         "ok": True,
@@ -338,8 +363,25 @@ def case_summary(case_dir: Path) -> dict[str, Any]:
         "primary_entity": case.get("primary_entity", {}),
         "time_window": case.get("time_window", {}),
         "coverage": case.get("coverage", {}),
-        "signals_summary": [_select(item, ["signal_id", "dimension", "role", "strength", "observed", "interpretation", "source_system", "evidence_refs"]) for item in signals],
-        "timeline_summary": [_select(item, ["timestamp", "dimension", "summary", "evidence_refs"]) for item in timeline],
+        "signals_summary": [
+            _select(
+                item,
+                [
+                    "signal_id",
+                    "dimension",
+                    "role",
+                    "strength",
+                    "observed",
+                    "interpretation",
+                    "source_system",
+                    "evidence_refs",
+                ],
+            )
+            for item in signals
+        ],
+        "timeline_summary": [
+            _select(item, ["timestamp", "dimension", "summary", "evidence_refs"]) for item in timeline
+        ],
         "topology_summary": summarize_topology(entities, topology),
         "dimension_details": dimension_details,
         "evidence_inventory": evidence_inventory(case_dir),
@@ -514,18 +556,26 @@ def _rank_log_samples(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
         peak = max(allocated) if allocated else -1
         evidence_ref = str(item.get("evidence_ref") or "")
         role_rank = 0 if item.get("role") == "target" else 1
-        unusable_rank = 1 if re.search(
-            r"unable to retrieve|no logs|logs? unavailable|not found|error from server",
-            message,
-            re.IGNORECASE,
-        ) else 0
+        unusable_rank = (
+            1
+            if re.search(
+                r"unable to retrieve|no logs|logs? unavailable|not found|error from server",
+                message,
+                re.IGNORECASE,
+            )
+            else 0
+        )
         previous_rank = 0 if "previous" in evidence_ref else 1
-        failure_rank = 0 if re.search(
-            r"request_failed|config_missing|fatal|error_code|http_status.?[:=]?\s*500|"
-            r"exception|traceback|oomkilled|exit.?137",
-            message,
-            re.IGNORECASE,
-        ) else 1
+        failure_rank = (
+            0
+            if re.search(
+                r"request_failed|config_missing|fatal|error_code|http_status.?[:=]?\s*500|"
+                r"exception|traceback|oomkilled|exit.?137",
+                message,
+                re.IGNORECASE,
+            )
+            else 1
+        )
         return role_rank, unusable_rank, -peak, failure_rank, previous_rank
 
     return sorted(samples, key=priority)
@@ -551,11 +601,7 @@ def _align_correlated_samples(
         return logs, flows, spans
 
     preferred = next(
-        (
-            str(item.get("trace_id"))
-            for item in flows
-            if str(item.get("trace_id") or "") in shared_ids
-        ),
+        (str(item.get("trace_id")) for item in flows if str(item.get("trace_id") or "") in shared_ids),
         sorted(shared_ids)[0],
     )
 
@@ -642,7 +688,9 @@ def get_evidence(cases_dir: Path, case_id: str, evidence_ref: str, max_bytes: in
             if item.get("evidence_id") == evidence_ref:
                 return {"ok": True, "case_id": case_dir.name, "ref": relative, "record": item}
     path = safe_relative_path(case_dir, evidence_ref)
-    if evidence_ref not in set(EVIDENCE_FILES + ["case.yaml", "signals.jsonl", "timeline.jsonl", "entities.jsonl", "topology.jsonl"]):
+    if evidence_ref not in set(
+        EVIDENCE_FILES + ["case.yaml", "signals.jsonl", "timeline.jsonl", "entities.jsonl", "topology.jsonl"]
+    ):
         return {"ok": False, "error": f"evidence_ref is not agent-visible: {evidence_ref}"}
     if not path.exists() or not path.is_file():
         return {"ok": False, "error": f"evidence_ref not found: {evidence_ref}"}

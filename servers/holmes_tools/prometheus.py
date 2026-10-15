@@ -5,6 +5,7 @@ prometheus 工具集：查询 Prometheus API。
 重要：Prometheus API 的 POST 接口使用 form-encoded body（data=），不是 JSON body（json=）。
 Holmes 原始实现使用 requests.request(method="POST", data=payload)，此处保持一致。
 """
+
 import json
 import os
 import time
@@ -98,16 +99,27 @@ def _do_get(path: str, params: Optional[Dict] = None) -> str:
     try:
         r = _SESSION.get(url, params=params or {}, timeout=_get_timeout())
         elapsed = time.monotonic() - t0
-        log_http_request("GET", url, params_or_data=params,
-                         status_code=r.status_code, response_text=r.text, elapsed=elapsed)
+        log_http_request(
+            "GET",
+            url,
+            params_or_data=params,
+            status_code=r.status_code,
+            response_text=r.text,
+            elapsed=elapsed,
+        )
         r.raise_for_status()
         return r.text
     except Exception as e:
         elapsed = time.monotonic() - t0
         response_text = getattr(getattr(e, "response", None), "text", "") or ""
-        log_http_request("GET", url, params_or_data=params,
-                         status_code=getattr(e, 'response', {}) and getattr(e.response, 'status_code', None),
-                         response_text=response_text or str(e), elapsed=elapsed)
+        log_http_request(
+            "GET",
+            url,
+            params_or_data=params,
+            status_code=getattr(e, "response", {}) and getattr(e.response, "status_code", None),
+            response_text=response_text or str(e),
+            elapsed=elapsed,
+        )
         return _prometheus_http_error_payload(
             response_text=response_text,
             url=url,
@@ -131,16 +143,22 @@ def _do_post(path: str, data: Optional[Dict] = None) -> str:
         # ⚠️ 关键修复：使用 data= 而非 json=，Prometheus API 要求 form-encoded POST
         r = _SESSION.post(url, data=data or {}, timeout=_get_timeout())
         elapsed = time.monotonic() - t0
-        log_http_request("POST", url, params_or_data=data,
-                         status_code=r.status_code, response_text=r.text, elapsed=elapsed)
+        log_http_request(
+            "POST", url, params_or_data=data, status_code=r.status_code, response_text=r.text, elapsed=elapsed
+        )
         r.raise_for_status()
         return r.text
     except Exception as e:
         elapsed = time.monotonic() - t0
         response_text = getattr(getattr(e, "response", None), "text", "") or ""
-        log_http_request("POST", url, params_or_data=data,
-                         status_code=getattr(e, 'response', {}) and getattr(e.response, 'status_code', None),
-                         response_text=response_text or str(e), elapsed=elapsed)
+        log_http_request(
+            "POST",
+            url,
+            params_or_data=data,
+            status_code=getattr(e, "response", {}) and getattr(e.response, "status_code", None),
+            response_text=response_text or str(e),
+            elapsed=elapsed,
+        )
         return _prometheus_http_error_payload(
             response_text=response_text,
             url=url,
@@ -231,7 +249,9 @@ TOOLS: List[Tool] = [
     Tool(
         name="get_label_values",
         description=_query_only_description("Get all values for a label."),
-        inputSchema=_schema_req({"label_name": {"type": "string", "description": "Label name"}}, ["label_name"]),
+        inputSchema=_schema_req(
+            {"label_name": {"type": "string", "description": "Label name"}}, ["label_name"]
+        ),
     ),
     Tool(
         name="get_all_labels",
@@ -240,9 +260,7 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="get_series",
-        description=_query_only_description(
-            "Get time series matching match[] (and optional start/end)."
-        ),
+        description=_query_only_description("Get time series matching match[] (and optional start/end)."),
         inputSchema=_schema_req(
             {
                 "match": {"type": "string", "description": "Series selector"},
@@ -254,9 +272,7 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="get_metric_metadata",
-        description=_query_only_description(
-            "Get metadata for metrics. Optionally pass metric_name."
-        ),
+        description=_query_only_description("Get metadata for metrics. Optionally pass metric_name."),
         inputSchema=_schema_req({"metric_name": {"type": "string"}}, []),
     ),
     Tool(
@@ -272,8 +288,7 @@ TOOLS: List[Tool] = [
     Tool(
         name="execute_prometheus_range_query",
         description=_query_only_description(
-            "Execute range PromQL query. Required: query, start, end. "
-            "Optional: step (e.g. 15s)."
+            "Execute range PromQL query. Required: query, start, end. Optional: step (e.g. 15s)."
         ),
         inputSchema=_schema_req(
             {

@@ -30,9 +30,14 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     return await call_text_tool_in_thread(
-        _SERVER, name, arguments, prometheus.call_tool,
-        log_call=log_tool_call, log_result=log_tool_result,
-        sanitize=True, catch_errors=True,
+        _SERVER,
+        name,
+        arguments,
+        prometheus.call_tool,
+        log_call=log_tool_call,
+        log_result=log_tool_result,
+        sanitize=True,
+        catch_errors=True,
     )
 
 

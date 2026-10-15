@@ -32,9 +32,9 @@ class MetricsScopeTests(unittest.TestCase):
     def test_accepts_multiple_exact_scoped_selectors(self):
         error = metrics.validate_promql_scope(
             (
-                'max_over_time(container_memory_working_set_bytes'
+                "max_over_time(container_memory_working_set_bytes"
                 '{namespace="ns",pod="pod",container="api"}[30m]) '
-                '/ kube_pod_container_resource_limits'
+                "/ kube_pod_container_resource_limits"
                 '{namespace="ns",pod="pod",container="api",resource="memory",unit="byte"}'
             ),
             "ns",
@@ -44,11 +44,7 @@ class MetricsScopeTests(unittest.TestCase):
 
     def test_accepts_aggregation_label_list(self):
         error = metrics.validate_promql_scope(
-            (
-                "sum by (container) ("
-                'container_memory_working_set_bytes{namespace="ns",pod="pod"}'
-                ")"
-            ),
+            ('sum by (container) (container_memory_working_set_bytes{namespace="ns",pod="pod"})'),
             "ns",
             "pod",
         )
@@ -56,11 +52,7 @@ class MetricsScopeTests(unittest.TestCase):
 
     def test_accepts_group_aggregation_operator(self):
         error = metrics.validate_promql_scope(
-            (
-                "group by (container) ("
-                'http_requests_total{namespace="ns",pod="pod"}'
-                ")"
-            ),
+            ('group by (container) (http_requests_total{namespace="ns",pod="pod"})'),
             "ns",
             "pod",
         )
@@ -68,11 +60,7 @@ class MetricsScopeTests(unittest.TestCase):
 
     def test_accepts_pod_scoped_subquery_and_at_modifier(self):
         error = metrics.validate_promql_scope(
-            (
-                "max_over_time("
-                'http_requests_total{namespace="ns",pod="pod"}[30m:1m]'
-                ") @ start()"
-            ),
+            ('max_over_time(http_requests_total{namespace="ns",pod="pod"}[30m:1m]) @ start()'),
             "ns",
             "pod",
         )
@@ -136,11 +124,7 @@ class MetricsScopeTests(unittest.TestCase):
                     "namespace": "ns",
                     "pod": "pod",
                     "purpose": "bound nested range evaluation work",
-                    "promql": (
-                        "max_over_time("
-                        'up{namespace="ns",pod="pod"}[30m:1m]'
-                        ")"
-                    ),
+                    "promql": ('max_over_time(up{namespace="ns",pod="pod"}[30m:1m])'),
                     "query_type": "range",
                     "start": "2026-07-23T10:00:00Z",
                     "end": "2026-07-23T10:30:00Z",
@@ -250,7 +234,7 @@ class MetricsResultTests(unittest.TestCase):
                     "pod": "pod",
                     "purpose": "verify the current image pull waiting reason",
                     "promql": (
-                        'kube_pod_container_status_waiting_reason'
+                        "kube_pod_container_status_waiting_reason"
                         '{namespace="ns",pod="pod",reason="ImagePullBackOff"}'
                     ),
                     "query_type": "instant",
@@ -259,7 +243,9 @@ class MetricsResultTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["purpose"], "verify the current image pull waiting reason")
-        self.assertEqual(result["query"]["promql"].split("{", 1)[0], "kube_pod_container_status_waiting_reason")
+        self.assertEqual(
+            result["query"]["promql"].split("{", 1)[0], "kube_pod_container_status_waiting_reason"
+        )
         self.assertEqual(result["coverage"], "present")
         self.assertEqual(result["facts"][0]["value"], "1")
         self.assertEqual(result["facts"][0]["labels"]["reason"], "ImagePullBackOff")
@@ -318,10 +304,7 @@ class MetricsResultTests(unittest.TestCase):
                     "namespace": "ns",
                     "pod": "pod",
                     "purpose": "verify whether application memory approached its limit",
-                    "promql": (
-                        'container_memory_working_set_bytes'
-                        '{namespace="ns",pod="pod"}'
-                    ),
+                    "promql": ('container_memory_working_set_bytes{namespace="ns",pod="pod"}'),
                     "query_type": "instant",
                 }
             )
@@ -413,7 +396,8 @@ class MetricsResultTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -472,7 +456,8 @@ class MetricsResultTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -539,7 +524,8 @@ class MetricsResultTests(unittest.TestCase):
             },
         )
         self.assertNotIn("time_range_adjustment", result["query"])
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": promql,
@@ -625,7 +611,8 @@ class MetricsResultTests(unittest.TestCase):
             result["query"]["pod_creation_timestamp"],
             "2026-07-23T07:25:45Z",
         )
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": promql,
@@ -711,7 +698,8 @@ class MetricsResultTests(unittest.TestCase):
                 "action": "replaced_with_current_bounded_window",
             },
         )
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": promql,
@@ -797,7 +785,8 @@ class MetricsResultTests(unittest.TestCase):
                 "action": "replaced_with_current_bounded_window",
             },
         )
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": promql,
@@ -992,11 +981,9 @@ class MetricsResultTests(unittest.TestCase):
         ):
             for window_minutes in (0, -5):
                 with self.subTest(window_minutes=window_minutes):
-                    window, requested, adjustment, error = (
-                        metrics._range_window(
-                            {"window_minutes": window_minutes},
-                            not_before=None,
-                        )
+                    window, requested, adjustment, error = metrics._range_window(
+                        {"window_minutes": window_minutes},
+                        not_before=None,
                     )
                     self.assertEqual(window, expected)
                     self.assertEqual(requested, {})
@@ -1004,11 +991,9 @@ class MetricsResultTests(unittest.TestCase):
                     self.assertIsNone(error)
 
             try:
-                window, requested, adjustment, error = (
-                    metrics._range_window(
-                        {"window_minutes": 10**400},
-                        not_before=None,
-                    )
+                window, requested, adjustment, error = metrics._range_window(
+                    {"window_minutes": 10**400},
+                    not_before=None,
                 )
             except OverflowError as exc:
                 self.fail(f"window_minutes overflow escaped normalization: {exc}")
@@ -1096,7 +1081,8 @@ class MetricsResultTests(unittest.TestCase):
             result["query"]["pod_creation_timestamp"],
             "2026-07-23T07:25:45Z",
         )
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -1183,7 +1169,8 @@ class MetricsResultTests(unittest.TestCase):
                         "action": "replaced_with_current_bounded_window",
                     },
                 )
-                _assert_query_call(backend, 
+                _assert_query_call(
+                    backend,
                     "api/v1/query_range",
                     {
                         "query": promql,
@@ -1293,7 +1280,8 @@ class MetricsResultTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": 'up{namespace="ns",pod="pod"}',
@@ -1395,7 +1383,8 @@ class MetricsResultTests(unittest.TestCase):
                 },
             },
         )
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": promql,
@@ -1484,7 +1473,8 @@ class MetricsResultTests(unittest.TestCase):
                 },
             },
         )
-        _assert_query_call(backend, 
+        _assert_query_call(
+            backend,
             "api/v1/query_range",
             {
                 "query": promql,
@@ -1906,7 +1896,7 @@ class MetricsQuoteStyleAndVocabularyTests(unittest.TestCase):
         for promql in (
             "kube_pod_container_status_restarts_total{namespace='ns',pod='pod'}",
             "container_memory_working_set_bytes{namespace=`ns`, pod=`pod`}",
-            'rate(container_cpu_usage_seconds_total{namespace=\'ns\',pod="pod"}[5m])',
+            "rate(container_cpu_usage_seconds_total{namespace='ns',pod=\"pod\"}[5m])",
         ):
             self.assertIsNone(metrics.validate_promql_scope(promql, "ns", "pod"), promql)
 
@@ -1925,10 +1915,15 @@ class MetricsQuoteStyleAndVocabularyTests(unittest.TestCase):
     def test_scope_rejection_carries_source_backed_metric_vocabulary(self):
         names = {"status": "success", "data": ["kube_pod_status_phase", "container_memory_working_set_bytes"]}
         with patch.object(metrics, "_request_prometheus", return_value=(names, 200)) as request:
-            result = metrics.execute({
-                "namespace": "ns", "pod": "pod", "purpose": "memory",
-                "promql": "node_memory_MemAvailable_bytes", "query_type": "instant",
-            })
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "memory",
+                    "promql": "node_memory_MemAvailable_bytes",
+                    "query_type": "instant",
+                }
+            )
         self.assertEqual(result["error"]["code"], "missing_pod_scope")
         self.assertEqual(request.call_args.args[0], "api/v1/label/__name__/values")
         self.assertEqual(request.call_args.args[1]["match[]"], '{namespace="ns",pod="pod"}')
@@ -1936,24 +1931,41 @@ class MetricsQuoteStyleAndVocabularyTests(unittest.TestCase):
         self.assertIn("container_memory_working_set_bytes,kube_pod_status_phase", result["limitations"][0])
 
     def test_empty_success_carries_vocabulary_and_failed_lookup_is_silent(self):
-        entity = {"kind": "Pod", "namespace": "ns", "pod": "pod", "pod_uid": "uid-1",
-                  "pod_ip": None, "node": "node1", "containers": ["api"]}
+        entity = {
+            "kind": "Pod",
+            "namespace": "ns",
+            "pod": "pod",
+            "pod_uid": "uid-1",
+            "pod_ip": None,
+            "node": "node1",
+            "containers": ["api"],
+        }
         empty = {"status": "success", "data": {"resultType": "vector", "result": []}}
-        arguments = {"namespace": "ns", "pod": "pod", "purpose": "cpu",
-                     "promql": 'container_cpu_usage_seconds_total{namespace="ns",pod="pod"}',
-                     "query_type": "instant"}
+        arguments = {
+            "namespace": "ns",
+            "pod": "pod",
+            "purpose": "cpu",
+            "promql": 'container_cpu_usage_seconds_total{namespace="ns",pod="pod"}',
+            "query_type": "instant",
+        }
         with (
             patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
-            patch.object(metrics, "_request_prometheus",
-                         side_effect=[(empty, 200), ({"status": "success", "data": []}, 200)]),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                side_effect=[(empty, 200), ({"status": "success", "data": []}, 200)],
+            ),
         ):
             result = metrics.execute(arguments)
         self.assertEqual(result["coverage"], "empty")
         self.assertEqual(result["limitations"], ["no metric has series for this Pod in the last 60m"])
         with (
             patch.object(metrics, "resolve_pod_scope", return_value=(entity, None)),
-            patch.object(metrics, "_request_prometheus",
-                         side_effect=[(empty, 200), ({"status": "error", "error": "down"}, None)]),
+            patch.object(
+                metrics,
+                "_request_prometheus",
+                side_effect=[(empty, 200), ({"status": "error", "error": "down"}, None)],
+            ),
         ):
             result = metrics.execute(arguments)
         self.assertEqual(result["coverage"], "empty")
@@ -1962,10 +1974,15 @@ class MetricsQuoteStyleAndVocabularyTests(unittest.TestCase):
     def test_vocabulary_is_bounded(self):
         names = {"status": "success", "data": [f"metric_{i:03d}_with_a_long_name" for i in range(300)]}
         with patch.object(metrics, "_request_prometheus", return_value=(names, 200)):
-            result = metrics.execute({
-                "namespace": "ns", "pod": "pod", "purpose": "p",
-                "promql": "up", "query_type": "instant",
-            })
+            result = metrics.execute(
+                {
+                    "namespace": "ns",
+                    "pod": "pod",
+                    "purpose": "p",
+                    "promql": "up",
+                    "query_type": "instant",
+                }
+            )
         note = result["limitations"][0]
         self.assertLessEqual(len(note), metrics.MAX_METRIC_NAME_HINT_CHARS + 200)
         self.assertIn("300 metric names", note)

@@ -50,6 +50,7 @@ _configured_loggers: set = set()
 # 格式化器
 # ---------------------------------------------------------------------------
 
+
 class _TextFormatter(logging.Formatter):
     """人类可读的文本格式，带时间戳、级别、logger 名称。"""
 
@@ -81,6 +82,7 @@ class _JsonFormatter(logging.Formatter):
 # ---------------------------------------------------------------------------
 # 核心配置
 # ---------------------------------------------------------------------------
+
 
 def _resolve_level() -> int:
     """从环境变量解析日志级别。"""
@@ -123,6 +125,7 @@ def _ensure_stderr_handler(logger: logging.Logger) -> None:
 # 公开 API：get_logger
 # ---------------------------------------------------------------------------
 
+
 def get_logger(name: str) -> logging.Logger:
     """
     获取一个已配置好的 logger 实例。
@@ -145,6 +148,7 @@ def get_logger(name: str) -> logging.Logger:
 # ---------------------------------------------------------------------------
 # 内部工具函数
 # ---------------------------------------------------------------------------
+
 
 def _truncate(text: Any, max_len: int) -> str:
     """安全截断，处理非字符串类型。"""
@@ -185,6 +189,7 @@ def _structured_log(
 # 公开 API：log_tool_call
 # ---------------------------------------------------------------------------
 
+
 def log_tool_call(
     server_name: str,
     tool_name: str,
@@ -205,15 +210,20 @@ def log_tool_call(
 
     if logger.isEnabledFor(logging.DEBUG):
         # DEBUG：完整参数，便于排查
-        _structured_log(logger, logging.DEBUG, (
-            f"[TOOL_CALL] {tool_name} | "
-            f"args={_truncate(json.dumps(arguments or {}, ensure_ascii=False, default=str), _BODY_MAX)}"
-        ), data={
-            "event": "tool_call",
-            "server": server_name,
-            "tool": tool_name,
-            "arguments": arguments,
-        })
+        _structured_log(
+            logger,
+            logging.DEBUG,
+            (
+                f"[TOOL_CALL] {tool_name} | "
+                f"args={_truncate(json.dumps(arguments or {}, ensure_ascii=False, default=str), _BODY_MAX)}"
+            ),
+            data={
+                "event": "tool_call",
+                "server": server_name,
+                "tool": tool_name,
+                "arguments": arguments,
+            },
+        )
     elif logger.isEnabledFor(logging.INFO):
         # INFO：参数摘要
         logger.info("[TOOL_CALL] %s | args=(%s)", tool_name, _args_summary(arguments))
@@ -222,6 +232,7 @@ def log_tool_call(
 # ---------------------------------------------------------------------------
 # 公开 API：log_tool_result
 # ---------------------------------------------------------------------------
+
 
 def log_tool_result(
     server_name: str,
@@ -251,23 +262,26 @@ def log_tool_result(
 
     if error:
         # ERROR：异常详情
-        _structured_log(logger, logging.ERROR, (
-            f"[TOOL_RESULT] {tool_name} | FAILED | "
-            f"{elapsed_ms:.0f}ms | {type(error).__name__}: {error}"
-        ), data={
-            "event": "tool_result",
-            "server": server_name,
-            "tool": tool_name,
-            "status": "error",
-            "elapsed_ms": round(elapsed_ms, 1),
-            "error_type": type(error).__name__,
-            "error_msg": str(error),
-        })
+        _structured_log(
+            logger,
+            logging.ERROR,
+            (f"[TOOL_RESULT] {tool_name} | FAILED | {elapsed_ms:.0f}ms | {type(error).__name__}: {error}"),
+            data={
+                "event": "tool_result",
+                "server": server_name,
+                "tool": tool_name,
+                "status": "error",
+                "elapsed_ms": round(elapsed_ms, 1),
+                "error_type": type(error).__name__,
+                "error_msg": str(error),
+            },
+        )
         # 附带堆栈（仅 DEBUG 可见完整 traceback，ERROR 级别记录摘要即可）
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[TOOL_RESULT] %s | traceback:\n%s",
-                tool_name, traceback.format_exception(type(error), error, error.__traceback__),
+                tool_name,
+                traceback.format_exception(type(error), error, error.__traceback__),
             )
         return
 
@@ -279,37 +293,47 @@ def log_tool_result(
 
     if logger.isEnabledFor(logging.DEBUG):
         # DEBUG：完整响应体
-        _structured_log(logger, logging.DEBUG, (
-            f"[TOOL_RESULT] {tool_name} | {status.upper()} | "
-            f"{elapsed_ms:.0f}ms | {result_len} chars | "
-            f"body={_truncate(result_str, _BODY_MAX)}"
-        ), data={
-            "event": "tool_result",
-            "server": server_name,
-            "tool": tool_name,
-            "status": status,
-            "elapsed_ms": round(elapsed_ms, 1),
-            "result_length": result_len,
-            "result": result_str[:_BODY_MAX],
-        })
+        _structured_log(
+            logger,
+            logging.DEBUG,
+            (
+                f"[TOOL_RESULT] {tool_name} | {status.upper()} | "
+                f"{elapsed_ms:.0f}ms | {result_len} chars | "
+                f"body={_truncate(result_str, _BODY_MAX)}"
+            ),
+            data={
+                "event": "tool_result",
+                "server": server_name,
+                "tool": tool_name,
+                "status": status,
+                "elapsed_ms": round(elapsed_ms, 1),
+                "result_length": result_len,
+                "result": result_str[:_BODY_MAX],
+            },
+        )
     elif logger.isEnabledFor(logging.INFO):
         # INFO：摘要
         logger.info(
             "[TOOL_RESULT] %s | %s | %.0fms | %d chars",
-            tool_name, status.upper(), elapsed_ms, result_len,
+            tool_name,
+            status.upper(),
+            elapsed_ms,
+            result_len,
         )
 
     # WARNING：结果中检测到错误标记时额外告警
     if status == "warn" and logger.isEnabledFor(logging.WARNING):
         logger.warning(
             "[TOOL_RESULT] %s | 结果包含错误标记 | preview=%s",
-            tool_name, _truncate(result_str, 300),
+            tool_name,
+            _truncate(result_str, 300),
         )
 
 
 # ---------------------------------------------------------------------------
 # 公开 API：log_http_request
 # ---------------------------------------------------------------------------
+
 
 def log_http_request(
     method: str,
@@ -346,38 +370,52 @@ def log_http_request(
             if isinstance(params_or_data, dict)
             else str(params_or_data or "")
         )
-        _structured_log(logger, logging.DEBUG, (
-            f"[HTTP] {method} {url} | {status_str} | "
-            f"{elapsed_ms:.0f}ms | req={_truncate(params_str, _BODY_MAX)} | "
-            f"resp={_truncate(response_text or '', _BODY_MAX)}"
-        ), data={
-            "event": "http_request",
-            "method": method,
-            "url": url,
-            "status_code": status_code,
-            "elapsed_ms": round(elapsed_ms, 1),
-            "request_params": params_or_data,
-            "response_length": resp_len,
-            "response_body": (response_text or "")[:_BODY_MAX],
-        })
+        _structured_log(
+            logger,
+            logging.DEBUG,
+            (
+                f"[HTTP] {method} {url} | {status_str} | "
+                f"{elapsed_ms:.0f}ms | req={_truncate(params_str, _BODY_MAX)} | "
+                f"resp={_truncate(response_text or '', _BODY_MAX)}"
+            ),
+            data={
+                "event": "http_request",
+                "method": method,
+                "url": url,
+                "status_code": status_code,
+                "elapsed_ms": round(elapsed_ms, 1),
+                "request_params": params_or_data,
+                "response_length": resp_len,
+                "response_body": (response_text or "")[:_BODY_MAX],
+            },
+        )
     elif logger.isEnabledFor(logging.INFO):
         # INFO：摘要
         logger.info(
             "[HTTP] %s %s | %s | %.0fms | resp=%d chars",
-            method, url, status_str, elapsed_ms, resp_len,
+            method,
+            url,
+            status_str,
+            elapsed_ms,
+            resp_len,
         )
 
     # WARNING：HTTP 错误状态码
     if status_code and status_code >= 400:
         logger.warning(
             "[HTTP] %s %s | HTTP %s | %.0fms | resp_preview=%s",
-            method, url, status_code, elapsed_ms, _truncate(response_text or '', 500),
+            method,
+            url,
+            status_code,
+            elapsed_ms,
+            _truncate(response_text or "", 500),
         )
 
 
 # ---------------------------------------------------------------------------
 # 公开 API：log_command
 # ---------------------------------------------------------------------------
+
 
 def log_command(
     cmd: str,
@@ -410,44 +448,61 @@ def log_command(
 
     # ERROR：异常（超时、权限等）
     if error:
-        _structured_log(logger, logging.ERROR, (
-            f"[CMD] EXCEPTION | {elapsed_ms:.0f}ms | "
-            f"{type(error).__name__}: {error} | cmd={_truncate(cmd, 300)}"
-        ), data={
-            "event": "command",
-            "cmd": cmd[:_BODY_MAX],
-            "status": "exception",
-            "elapsed_ms": round(elapsed_ms, 1),
-            "error_type": type(error).__name__,
-            "error_msg": str(error),
-        })
+        _structured_log(
+            logger,
+            logging.ERROR,
+            (
+                f"[CMD] EXCEPTION | {elapsed_ms:.0f}ms | "
+                f"{type(error).__name__}: {error} | cmd={_truncate(cmd, 300)}"
+            ),
+            data={
+                "event": "command",
+                "cmd": cmd[:_BODY_MAX],
+                "status": "exception",
+                "elapsed_ms": round(elapsed_ms, 1),
+                "error_type": type(error).__name__,
+                "error_msg": str(error),
+            },
+        )
         return
 
     if logger.isEnabledFor(logging.DEBUG):
         # DEBUG：完整输出
-        _structured_log(logger, logging.DEBUG, (
-            f"[CMD] exit={returncode} | {elapsed_ms:.0f}ms | "
-            f"cmd={cmd} | "
-            f"stdout={_truncate(stdout or '', _BODY_MAX)} | "
-            f"stderr={_truncate(stderr or '', _BODY_MAX)}"
-        ), data={
-            "event": "command",
-            "cmd": cmd,
-            "returncode": returncode,
-            "elapsed_ms": round(elapsed_ms, 1),
-            "stdout": (stdout or "")[:_BODY_MAX],
-            "stderr": (stderr or "")[:_BODY_MAX],
-        })
+        _structured_log(
+            logger,
+            logging.DEBUG,
+            (
+                f"[CMD] exit={returncode} | {elapsed_ms:.0f}ms | "
+                f"cmd={cmd} | "
+                f"stdout={_truncate(stdout or '', _BODY_MAX)} | "
+                f"stderr={_truncate(stderr or '', _BODY_MAX)}"
+            ),
+            data={
+                "event": "command",
+                "cmd": cmd,
+                "returncode": returncode,
+                "elapsed_ms": round(elapsed_ms, 1),
+                "stdout": (stdout or "")[:_BODY_MAX],
+                "stderr": (stderr or "")[:_BODY_MAX],
+            },
+        )
     elif logger.isEnabledFor(logging.INFO):
         # INFO：摘要
         logger.info(
             "[CMD] exit=%s | %.0fms | stdout=%d chars, stderr=%d chars | cmd=%s",
-            returncode, elapsed_ms, stdout_len, stderr_len, _truncate(cmd, 120),
+            returncode,
+            elapsed_ms,
+            stdout_len,
+            stderr_len,
+            _truncate(cmd, 120),
         )
 
     # WARNING：非零退出码
     if returncode and returncode != 0:
         logger.warning(
             "[CMD] 非零退出码 exit=%s | %.0fms | cmd=%s | stderr_preview=%s",
-            returncode, elapsed_ms, _truncate(cmd, 200), _truncate(stderr or '', 500),
+            returncode,
+            elapsed_ms,
+            _truncate(cmd, 200),
+            _truncate(stderr or "", 500),
         )

@@ -44,21 +44,30 @@ def validate_query(query, known_fields, default_fields):
     group_by = query.get("group_by")
     if "group_by" in query and (not isinstance(group_by, str) or group_by not in known_fields):
         raise ValueError("group_by must name an available scalar field")
-    return {"fields": list(dict.fromkeys(fields)), "where": copy.deepcopy(where),
-            "match": match, **({"group_by": group_by} if group_by is not None else {})}
+    return {
+        "fields": list(dict.fromkeys(fields)),
+        "where": copy.deepcopy(where),
+        "match": match,
+        **({"group_by": group_by} if group_by is not None else {}),
+    }
 
 
 def _compare(actual, op, expected):
     if actual is None and expected is not None:
         return None
     if op in {"eq", "ne"}:
-        equal = (type(actual) is type(expected) or
-                 type(actual) in (int, float) and type(expected) in (int, float)) and actual == expected
+        equal = (
+            type(actual) is type(expected) or type(actual) in (int, float) and type(expected) in (int, float)
+        ) and actual == expected
         return equal if op == "eq" else not equal
     if type(actual) not in (int, float) or type(expected) not in (int, float):
         raise ValueError("Ordered comparisons require numeric source fields")
-    return {"gt": actual > expected, "gte": actual >= expected,
-            "lt": actual < expected, "lte": actual <= expected}[op]
+    return {
+        "gt": actual > expected,
+        "gte": actual >= expected,
+        "lt": actual < expected,
+        "lte": actual <= expected,
+    }[op]
 
 
 def select_records(rows, query, identity_fields=()):
@@ -89,6 +98,9 @@ def select_records(rows, query, identity_fields=()):
         result.update(result_type="groups", groups=list(groups.values()))
     else:
         columns = list(dict.fromkeys([*identity_fields, *query["fields"]]))
-        result.update(result_type="records", columns=columns,
-                      rows=[{f: copy.deepcopy(row.get(f)) for f in columns} for row in matched])
+        result.update(
+            result_type="records",
+            columns=columns,
+            rows=[{f: copy.deepcopy(row.get(f)) for f in columns} for row in matched],
+        )
     return result

@@ -91,6 +91,7 @@ def line_count(path: Path) -> int:
     if not path.exists():
         return 0
     if path.suffix in {".jsonl", ".txt"}:
-        return sum(1 for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+        return sum(
+            1 for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()
+        )
     return 1 if path.stat().st_size > 0 else 0
-

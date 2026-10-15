@@ -262,13 +262,20 @@ recommended_refs_by_dimension:
             self._write_case(root)
 
             with patch.dict(os.environ, {"AIOPS_CASES_DIR": str(root / "cases")}):
-                payload = json.loads(aiops_case.call_tool("get_aiops_case", {"case_id": "oomkilled-aiops-temp-aiops-oom-business"}))
+                payload = json.loads(
+                    aiops_case.call_tool(
+                        "get_aiops_case", {"case_id": "oomkilled-aiops-temp-aiops-oom-business"}
+                    )
+                )
 
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["case_id"], "oomkilled-aiops-temp-aiops-oom-business")
             self.assertEqual(payload["coverage"]["metrics"], "present")
             self.assertEqual(payload["topology_summary"]["directness"]["direct"], 2)
-            self.assertEqual(payload["recommended_refs_by_dimension"]["metrics"], ["metric-aiops-temp-aiops-oom-business-prometheus"])
+            self.assertEqual(
+                payload["recommended_refs_by_dimension"]["metrics"],
+                ["metric-aiops-temp-aiops-oom-business-prometheus"],
+            )
             details = payload["dimension_details"]
             self.assertEqual(details["metrics"]["highlights"][0]["max"], "63.2Mi")
             self.assertEqual(details["logs"]["samples"][0]["container"], "business-api")
@@ -390,7 +397,10 @@ recommended_refs_by_dimension:
                 payload = json.loads(
                     aiops_case.call_tool(
                         "get_aiops_case_evidence",
-                        {"case_id": "oomkilled-aiops-temp-aiops-oom-business", "evidence_ref": "../labels.yaml"},
+                        {
+                            "case_id": "oomkilled-aiops-temp-aiops-oom-business",
+                            "evidence_ref": "../labels.yaml",
+                        },
                     )
                 )
 
@@ -502,8 +512,7 @@ recommended_refs_by_dimension:
                     summary="Normal Started container business-api",
                     payload={
                         "events_preview": (
-                            "Warning BackOff Back-off restarting failed container "
-                            "business-api"
+                            "Warning BackOff Back-off restarting failed container business-api"
                         )
                     },
                 )
@@ -515,10 +524,7 @@ recommended_refs_by_dimension:
     def test_log_ranking_prefers_diagnostic_json_over_unavailable_previous_log(self):
         samples = [
             {
-                "message": (
-                    "unable to retrieve container logs for "
-                    "containerd://deadbeef"
-                ),
+                "message": ("unable to retrieve container logs for containerd://deadbeef"),
                 "role": "target",
                 "evidence_ref": "log-pod-previous",
             },

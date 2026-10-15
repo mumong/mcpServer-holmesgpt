@@ -3,6 +3,7 @@ MCP 入口层参数清洗：保证传入内置工具（Jinja2/命令）的 argum
 与 Holmes 的 _command_runner 一致：工具层只做 None→""；非标量（如误传的 Jinja2 对象）在入口统一转为 ""，
 避免渲染进 shell 导致语法错误。参考：holmes/mcp/tools 的 list_tools/call_tool 由 JSON-RPC 入参驱动。
 """
+
 import os
 from typing import Any, Dict
 

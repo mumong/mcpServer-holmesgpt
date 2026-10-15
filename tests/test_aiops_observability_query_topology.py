@@ -15,10 +15,7 @@ def _oversized_topology_payload():
     pod_uid = "u" * 36
     observed_at = "2026-07-23T12:00:00Z"
     pod_entity = topology._entity("Pod", namespace, pod, uid=pod_uid)
-    selector = {
-        f"key{index}-" + ("k" * 20): "v" * 60
-        for index in range(4)
-    }
+    selector = {f"key{index}-" + ("k" * 20): "v" * 60 for index in range(4)}
     facts = [
         topology._relationship_fact(
             namespace=namespace,
@@ -349,9 +346,7 @@ class TopologyQueryTests(unittest.TestCase):
             {edge["evidence_ref"] for edge in result["edges"]},
             set(result["evidence_refs"]),
         )
-        self.assertTrue(
-            all(edge["source_system"] == "kubernetes" for edge in result["edges"])
-        )
+        self.assertTrue(all(edge["source_system"] == "kubernetes" for edge in result["edges"]))
         self.assertEqual(
             result["topology_summary"]["relations"],
             {
@@ -363,12 +358,8 @@ class TopologyQueryTests(unittest.TestCase):
         )
         self.assertEqual(result["topology_summary"]["edge_count"], 5)
         self.assertEqual(result["topology_summary"]["entity_count"], 6)
-        self.assertTrue(
-            all(entity["entity_id"] for entity in result["entities"])
-        )
-        service_fact = next(
-            fact for fact in result["facts"] if fact["relation"] == "selects"
-        )
+        self.assertTrue(all(entity["entity_id"] for entity in result["entities"]))
+        service_fact = next(fact for fact in result["facts"] if fact["relation"] == "selects")
         self.assertEqual(service_fact["value"]["selector"], {"app": "api"})
         self.assertEqual(
             service_fact["value"]["matched_pod_labels"],
@@ -401,10 +392,7 @@ class TopologyQueryTests(unittest.TestCase):
             },
             "spec": {
                 "nodeName": "node-1",
-                "containers": [
-                    {"name": f"container-{index}"}
-                    for index in range(20)
-                ],
+                "containers": [{"name": f"container-{index}"} for index in range(20)],
             },
         }
         services = [
@@ -520,12 +508,7 @@ class TopologyQueryTests(unittest.TestCase):
             },
         )
         self.assertTrue(result["facts"])
-        self.assertTrue(
-            all(
-                fact["observed_at"] == "2026-07-23T12:00:00Z"
-                for fact in result["facts"]
-            )
-        )
+        self.assertTrue(all(fact["observed_at"] == "2026-07-23T12:00:00Z" for fact in result["facts"]))
 
     def test_call_tool_keeps_topology_result_under_six_kib(self):
         entity = {
@@ -547,10 +530,7 @@ class TopologyQueryTests(unittest.TestCase):
             },
             "spec": {
                 "nodeName": "node-with-a-long-but-valid-name",
-                "containers": [
-                    {"name": f"container-{index}"}
-                    for index in range(20)
-                ],
+                "containers": [{"name": f"container-{index}"} for index in range(20)],
             },
         }
         services = [
@@ -562,9 +542,7 @@ class TopologyQueryTests(unittest.TestCase):
                     "component": "observability-test",
                 },
                 "cluster_ip": f"10.96.0.{index + 1}",
-                "ports": [
-                    {"port": 8080 + index, "targetPort": f"http-{index}"}
-                ],
+                "ports": [{"port": 8080 + index, "targetPort": f"http-{index}"}],
             }
             for index in range(20)
         ]
@@ -669,10 +647,7 @@ class TopologyQueryTests(unittest.TestCase):
         self.assertEqual(set(result["evidence_refs"]), retained_refs)
         entity_ids = {entity["entity_id"] for entity in result["entities"]}
         self.assertTrue(
-            all(
-                edge["source"] in entity_ids and edge["target"] in entity_ids
-                for edge in result["edges"]
-            )
+            all(edge["source"] in entity_ids and edge["target"] in entity_ids for edge in result["edges"])
         )
         self.assertEqual(
             result["topology_summary"]["relations"],
@@ -717,10 +692,7 @@ class TopologyQueryTests(unittest.TestCase):
             {"owned_by", "selects", "scheduled_on", "owns_container"},
         )
 
-        entities = {
-            entity["entity_id"]: entity
-            for entity in result["entities"]
-        }
+        entities = {entity["entity_id"]: entity for entity in result["entities"]}
         self.assertEqual(
             {(entity["kind"], len(entity["name"])) for entity in entities.values()},
             {
@@ -732,9 +704,7 @@ class TopologyQueryTests(unittest.TestCase):
                 ("Container", 63),
             },
         )
-        self.assertTrue(
-            all("...[truncated]" not in entity["name"] for entity in entities.values())
-        )
+        self.assertTrue(all("...[truncated]" not in entity["name"] for entity in entities.values()))
         self.assertEqual(result["entity"], payload["entity"])
 
         fact_refs = {fact["ref"] for fact in result["facts"]}
@@ -742,8 +712,7 @@ class TopologyQueryTests(unittest.TestCase):
         self.assertEqual(fact_refs, {fact["ref"] for fact in payload["facts"]})
         self.assertTrue(
             all(
-                isinstance(fact["value"]["source"], dict)
-                and isinstance(fact["value"]["target"], dict)
+                isinstance(fact["value"]["source"], dict) and isinstance(fact["value"]["target"], dict)
                 for fact in result["facts"]
             )
         )
@@ -788,9 +757,7 @@ class TopologyQueryTests(unittest.TestCase):
             },
             "spec": {"nodeName": "node-1", "containers": [{"name": "api"}]},
         }
-        owner_chain = [
-            {"kind": "ReplicaSet", "name": "api-abc", "uid": "rs-uid"}
-        ]
+        owner_chain = [{"kind": "ReplicaSet", "name": "api-abc", "uid": "rs-uid"}]
 
         with (
             patch.object(
@@ -843,10 +810,7 @@ class TopologyQueryTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            {
-                (item["source"], item["status"])
-                for item in result["limitations"]
-            },
+            {(item["source"], item["status"]) for item in result["limitations"]},
             {
                 ("owners", "partial"),
                 ("services", "error"),
@@ -889,8 +853,7 @@ class TopologyQueryTests(unittest.TestCase):
                         {
                             "code": "pod_uid_conflict",
                             "message": (
-                                "current Pod UID replacement-uid does not match "
-                                "supplied UID pod-uid"
+                                "current Pod UID replacement-uid does not match supplied UID pod-uid"
                             ),
                         },
                     ),
