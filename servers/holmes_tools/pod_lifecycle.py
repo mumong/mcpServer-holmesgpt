@@ -46,14 +46,12 @@ def _kubectl_config():
 TOOL = Tool(
     name="query_pod_lifecycle",
     description=(
-        "Read compact, structured Kubernetes Pod lifecycle facts. Preferred for Pod health, "
-        "restart and termination investigations: includes ALL selected Pods (also Running/Ready), "
-        "UID, creation time, container current/last states, exit reasons, timestamps and restart totals. "
-        "Running/Ready does not exclude a recent termination. Does not diagnose or fetch logs/metrics. "
-        "Omit namespace for cluster scope; pod requires namespace. Follow next_continue_token "
-        "with the same scope to cover further pages; a partial page is not the entire cluster. "
-        "Default recent window is 10 minutes, configurable; lastState is not complete history, "
-        "and restart_count_in_window is unknown, not zero."
+        "Structured Pod lifecycle facts; preferred for Pod health, restart and termination checks. "
+        "Returns ALL selected Pods (Running/Ready included): UID, phase, readiness, container current/last "
+        "state, exit reason/code, restarts. Facts only, no logs/metrics/diagnosis. Omit namespace for the "
+        "whole cluster; pod requires namespace. Recent window defaults to 10 minutes. Running/Ready does not "
+        "rule out a recent termination; lastState is not full history; null restart_count_in_window means "
+        "unknown, not zero. Paged: repeat the SAME arguments with next_continue_token; one page is not full coverage."
         + (pod_record_query.DESCRIPTION if pod_record_query.enabled() else "")
     ),
     inputSchema={

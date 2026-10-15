@@ -29,35 +29,26 @@ def enabled():
 
 
 DESCRIPTION = (
-    " Optional record_type enables field selection/filtering/counts instead of the full snapshot. "
-    "pod ready is its Ready condition (true/false/null); container ready is per-container. "
-    "Defaults retain core state; condition_states is compact type/status/reason and current_state omits timestamps. "
-    "conditions and state request original detail. "
-    "pod rows have Pod identity/phase/conditions only; container rows include readiness, "
-    "restarts and termination plus parent Pod identity (including init/ephemeral roles). "
-    "where predicates apply to the SAME row, match defaults to all. group_by computes exact "
-    "counts in the chosen row unit over this page, not over missing pages. Missing values stay unknown. "
-    "Example inventory count: record_type=pod, group_by=node. No record parameters preserves "
-    "the original full lifecycle response. Large results return partial records and next_continue_token; "
-    "repeat the SAME arguments with that continue_token to resume, without changing filters or fields. "
-    "Cursor expiry requires restarting the query; never interpret a partial page as full coverage."
+    " Optional record_type (pod|container) returns chosen fields instead of the full snapshot: pod rows = "
+    "Pod identity/phase/conditions; container rows add readiness, restarts, termination (incl. init/ephemeral). "
+    "where filters the SAME row (match all|any); group_by returns exact counts over this page only. "
+    "Missing values stay null (unknown). Example count: record_type=pod, group_by=node."
 )
 PROPERTIES = {
     "record_type": {"type": "string", "enum": ["pod", "container"],
                     "description": "Optional computed view: pod for inventory/counts; container for state/restarts/termination."},
     "fields": {"type": "array", "minItems": 1, "maxItems": 40,
                "items": {"type": "string", "enum": CONTAINER_FIELDS},
-               "description": "Omit for essentials; identities retained. Pod rows only: " + ", ".join(POD_FIELDS) +
-               ". Container rows allow all fields. last_termination_reason/last_exit_code/last_finished_at copy last_state.terminated."},
+               "description": "Omit for essentials; identities retained. Pod rows accept namespace..condition_states "
+               "(Pod-level names); container rows accept all. last_* copy last_state.terminated."},
     "where": {"type": "array", "maxItems": 12, "items": {
         "type": "object", "additionalProperties": False, "required": ["field", "op", "value"],
-        "properties": {"field": {"type": "string", "enum": CONTAINER_FIELDS},
+        "properties": {"field": {"type": "string", "description": "A name from fields."},
                        "op": {"type": "string", "enum": ["eq", "ne", "gt", "gte", "lt", "lte"]},
                        "value": {"type": ["string", "number", "boolean", "null"]}}}},
     "match": {"type": "string", "enum": ["all", "any"], "description": "Combine where conditions; defaults to all."},
-    "group_by": {"type": "string", "enum": [f for f in CONTAINER_FIELDS if f not in {
-        "conditions", "condition_states", "state", "current_state", "last_state", "resources"}],
-        "description": "Return exact count per scalar value instead of rows. Counts use record_type's unit."},
+    "group_by": {"type": "string",
+                 "description": "A scalar name from fields; returns exact counts per value instead of rows."},
 }
 
 

@@ -26,7 +26,7 @@ TOOL_DIGESTS = {
     "connectivity": "dfcb5244181ab4c22ba61c7d7d9980e17e678c9ba868256759584e44f3c1804b",
     # Intentional lifecycle-only addition: compact state fields, Pod Ready,
     # continuation descriptions. test_pod_lifecycle pins every OTHER tool unchanged.
-    "k8s_core": "cf4cf436201b0d767556cd9fcaabf829e146df01ef3a112be2305c32bd0a57a6",
+    "k8s_core": "c3a958427662441002f0bf7ba944a0a8823fc0f0a43d2aa6a863a676ee20f9ec",
     "core_investigation": "7f6de113428773e638b42f7c5edc295a4af2bd1d0d71d3740a7891dbd78fa3eb",
     # Full rule catalog deliberately disabled; all seven remaining schemas unchanged.
     "prometheus": "8c3602a33a62f5c8ed6a466ac69be4695a054842a1b61c53bf67197827714fed",
