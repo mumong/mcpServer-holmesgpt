@@ -590,7 +590,7 @@ def _fit_dimension_details(details: dict[str, Any], max_chars: int = 6000) -> di
     minimums = [1, 1, 1, 0, 2, 2, 1]
     while rendered_size() > max_chars:
         changed = False
-        for items, minimum in zip(collections, minimums):
+        for items, minimum in zip(collections, minimums, strict=False):
             if len(items) > minimum:
                 items.pop()
                 changed = True

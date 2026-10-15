@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
+from .. import _http
 from ..config import get_config
 from .common import (
     MAX_WINDOW_SECONDS,
@@ -16,8 +17,6 @@ from .common import (
     normalize_time_window,
     resolve_pod_scope,
 )
-
-from .. import _http
 
 try:
     import requests

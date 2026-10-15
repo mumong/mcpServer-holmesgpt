@@ -13,7 +13,7 @@ try:
 except ImportError:
     Template = None
 
-from .mcp_logger import get_logger, log_command
+from .mcp_logger import get_logger
 
 logger = get_logger("command")
 

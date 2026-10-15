@@ -17,7 +17,6 @@ from ..config import get_config
 from ..schemas import parse_datetime, parse_time_window
 from .fact_ledger import _TOPOLOGY_SOURCE_SYSTEMS
 
-
 # Tool inputs and backend queries remain bounded for safety, but successful
 # result serialization is lossless.  Context shaping belongs to the AIOps
 # observation layer, where the full MCP response can first be archived.

@@ -4,7 +4,6 @@ import copy
 import json
 import math
 
-
 CONTRACT_VERSION = "evidence-records.v1"
 QUERY_KEYS = frozenset({"record_type", "fields", "where", "match", "group_by"})
 

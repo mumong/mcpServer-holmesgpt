@@ -126,6 +126,7 @@ diagnosis、root cause、remediation 或 evaluator label。
 ```bash
 make check       # 语法检查 + 离线 unittest 合同测试
 make test-unit   # 仅离线测试
+make lint        # ruff E9/F/I/B；make format 统一格式
 ```
 
 `make test` 保留原 SSE 客户端检查，需要运行中的服务，并非单测。

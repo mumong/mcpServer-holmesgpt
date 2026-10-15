@@ -2,8 +2,7 @@
 
 import os
 
-from .record_query import CONTRACT_VERSION, QUERY_KEYS, encode, select_records, validate_query
-
+from .record_query import CONTRACT_VERSION, QUERY_KEYS, select_records, validate_query
 
 POD_FIELDS = ["namespace", "pod", "uid", "node", "phase", "reason", "created_at",
               "deletion_timestamp", "conditions", "ready", "condition_states"]

@@ -19,18 +19,17 @@ import functools
 import json
 import os
 import re
-import subprocess
 import shutil
+import subprocess
 import time
 from typing import Tuple
 
 import anyio.to_thread
+from holmes_tools.arg_utils import clamp_timeout
+from holmes_tools.mcp_logger import log_command, log_tool_call
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
-
-from holmes_tools.arg_utils import clamp_timeout
-from holmes_tools.mcp_logger import log_tool_call, log_tool_result, log_command
+from mcp.types import TextContent, Tool
 
 _SERVER = "bash-mcp"
 

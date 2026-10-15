@@ -20,7 +20,6 @@ from .common import (
     resolve_pod_scope,
 )
 
-
 MAX_OWNER_RELATIONSHIPS = 2
 MAX_SERVICE_RELATIONSHIPS = 1
 MAX_CONTAINER_RELATIONSHIPS = 1

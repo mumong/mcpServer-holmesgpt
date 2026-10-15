@@ -12,15 +12,15 @@ MCP Server 统一启动器
 配置文件格式见 config/mcp_config.yaml 或 config/mcp_config.example.yaml
 """
 
-import os
-import sys
-import subprocess
 import argparse
 import logging
-import signal
-import time
-import threading
+import os
 import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -331,7 +331,7 @@ class MCPServerManager:
     def stop_all(self):
         """停止所有服务"""
         self._pending_restart.clear()
-        for name, process in self.processes:
+        for _name, process in self.processes:
             try:
                 process.terminate()
                 process.wait(timeout=5)

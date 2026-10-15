@@ -14,7 +14,6 @@ from unittest.mock import patch
 
 from servers.holmes_tools import aiops_case
 
-
 PKG = Path(aiops_case.__file__).resolve().parents[2] / "servers"
 
 FR006_SUMMARY_FIELDS = [

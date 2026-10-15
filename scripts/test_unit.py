@@ -6,10 +6,10 @@ This is a regression guard, not an operating-system security sandbox.
 """
 
 import os
-from pathlib import Path
 import re
 import sys
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPORT_CHECKS = {

@@ -1,18 +1,18 @@
 """Read-only Pod lifecycle facts; no diagnosis, alert filtering, or follow-up calls."""
 
-from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from mcp.types import Tool
-from . import pod_record_query
 
+from . import pod_record_query
 
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 

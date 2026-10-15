@@ -8,7 +8,6 @@ from typing import Any
 
 import yaml
 
-
 AGENT_VISIBLE_FILES = [
     "case.yaml",
     "signals.jsonl",

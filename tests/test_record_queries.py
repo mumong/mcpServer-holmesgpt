@@ -3,15 +3,15 @@ import asyncio
 import copy
 import json
 import os
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "servers"))
 import k8s_core_server
-from holmes_tools import pod_lifecycle, pod_record_query
+from holmes_tools import pod_lifecycle
 from holmes_tools.record_query import select_records, validate_query
 
 

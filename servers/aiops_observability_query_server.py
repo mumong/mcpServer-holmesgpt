@@ -13,13 +13,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from holmes_tools import aiops_observability_query
+from holmes_tools.mcp_logger import get_logger, log_tool_call, log_tool_result
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
-
-from holmes_tools import aiops_observability_query
-from holmes_tools.mcp_logger import get_logger, log_tool_call, log_tool_result
-
 
 _SERVER = "aiops-observability-query-mcp"
 server = Server("aiops-observability-query-mcp-server")

@@ -8,6 +8,7 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
+from .. import _http
 from ..collectors import _kube
 from ..collectors.elasticsearch import es_credentials
 from ..config import get_config
@@ -20,8 +21,6 @@ from .common import (
     query_metadata_exceeds_budget,
     resolve_pod_scope,
 )
-
-from .. import _http
 
 try:
     import requests

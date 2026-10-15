@@ -2,8 +2,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from servers.holmes_tools import aiops_observability_fine
 from servers.aiops_observability.collectors import deepflow
+from servers.holmes_tools import aiops_observability_fine
 
 
 class AiopsFineToolTests(unittest.TestCase):

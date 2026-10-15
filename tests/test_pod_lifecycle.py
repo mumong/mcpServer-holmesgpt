@@ -2,20 +2,19 @@
 
 import copy
 import hashlib
-from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "servers"))
-from holmes_tools import pod_lifecycle as lifecycle
 from holmes_tools import kubernetes_core
-
+from holmes_tools import pod_lifecycle as lifecycle
 
 NOW = datetime(2026, 10, 9, 2, 48, 44, tzinfo=timezone.utc)
 

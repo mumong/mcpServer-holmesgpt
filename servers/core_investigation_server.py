@@ -10,12 +10,12 @@ Core Investigation MCP Server
 """
 
 import asyncio
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
 
 from holmes_tools import core_investigation
-from holmes_tools.server_adapter import call_text_tool_in_thread
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result
+from holmes_tools.server_adapter import call_text_tool_in_thread
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
 
 _SERVER = "core-investigation-mcp"
 server = Server("core-investigation-mcp-server")

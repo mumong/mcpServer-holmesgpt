@@ -3,12 +3,12 @@ import copy
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 
 from .record_query import encode
 

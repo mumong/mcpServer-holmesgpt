@@ -1,9 +1,9 @@
 """Output and timeout bounds default to no-ops for normal results."""
 
 import os
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 

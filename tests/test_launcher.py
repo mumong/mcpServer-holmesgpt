@@ -1,10 +1,10 @@
 """Launcher characterization: mock every process and thread boundary."""
 
+import sys
+import unittest
 from contextlib import ExitStack, redirect_stdout
 from io import StringIO
 from pathlib import Path
-import sys
-import unittest
 from unittest.mock import Mock, patch
 
 import start

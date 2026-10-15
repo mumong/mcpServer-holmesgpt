@@ -1,14 +1,15 @@
 import copy
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.test_record_queries import fixture, pod_lifecycle
 from holmes_tools import record_pages
+
+from tests.test_record_queries import fixture, pod_lifecycle
 
 
 class RecordPagesTests(unittest.TestCase):

@@ -10,12 +10,12 @@ Prometheus MCP Server
 """
 
 import asyncio
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
 
 from holmes_tools import prometheus
+from holmes_tools.mcp_logger import get_logger, log_tool_call, log_tool_result
 from holmes_tools.server_adapter import call_text_tool_in_thread
-from holmes_tools.mcp_logger import log_tool_call, log_tool_result, get_logger
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
 
 _SERVER = "prometheus-mcp"
 logger = get_logger(_SERVER)

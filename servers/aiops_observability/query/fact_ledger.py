@@ -7,7 +7,6 @@ import json
 import re
 from typing import Any
 
-
 CONTRACT_VERSION = "aiops.fact-ledger.v1"
 CANONICAL_SOURCE = "mcp_canonical"
 

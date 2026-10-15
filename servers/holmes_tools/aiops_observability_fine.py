@@ -14,7 +14,6 @@ from servers.aiops_observability.collectors.kubernetes import collect_kubernetes
 from servers.aiops_observability.collectors.prometheus import collect_prometheus
 from servers.aiops_observability.config import get_config
 from servers.aiops_observability.schemas import parse_time_window
-from servers.aiops_observability.topology import build_topology
 
 
 def _json(payload: dict[str, Any]) -> str:

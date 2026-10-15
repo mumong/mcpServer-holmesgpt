@@ -713,6 +713,7 @@ class SignalsAndTempoTests(unittest.TestCase):
 
     def test_tempo_empty_without_trace_ids(self):
         import os
+
         from servers.aiops_observability.collectors import tempo
         with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}):
             r = tempo.collect_tempo(namespace="ns", pod="p", trace_ids=[], timeout=5)
@@ -721,6 +722,7 @@ class SignalsAndTempoTests(unittest.TestCase):
 
     def test_tempo_present_when_spans_found(self):
         import os
+
         from servers.aiops_observability.collectors import tempo
         trace_json = json.dumps({"batches": [{"scopeSpans": [{"spans": [{"name": "GET /allocate"}]}]}]})
         with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
@@ -732,6 +734,7 @@ class SignalsAndTempoTests(unittest.TestCase):
 
     def test_tempo_reports_backend_failure_instead_of_empty(self):
         import os
+
         from servers.aiops_observability.collectors import tempo
         with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
              patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
@@ -752,6 +755,7 @@ class SignalsAndTempoTests(unittest.TestCase):
 
     def test_tempo_preserves_partial_failure_with_successful_empty_lookup(self):
         import os
+
         from servers.aiops_observability.collectors import tempo
         with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
              patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
@@ -780,6 +784,7 @@ class SignalsAndTempoTests(unittest.TestCase):
 
     def test_tempo_successful_lookup_without_spans_is_empty(self):
         import os
+
         from servers.aiops_observability.collectors import tempo
         with patch.dict(os.environ, {"AIOPS_TEMPO_EXEC_ENABLED": "true"}), \
              patch.object(tempo._kube, "find_pod", return_value="lgtm-0"), \
@@ -920,9 +925,10 @@ class IndependentAuditFixTests(unittest.TestCase):
         # Regression (independent audit finding #1): when ES is empty but k8s
         # collected container logs, coverage.logs must NOT be misleadingly empty.
         from servers.aiops_observability.case_builder import _trace_ids_from_evidence
+
         # exercised indirectly; the coverage upgrade logic lives in _write_package.
         # Here we just assert the trace extractor ignores non-log evidence safely.
-        from servers.aiops_observability.schemas import EvidenceItem, SourceResult
+        from servers.aiops_observability.schemas import SourceResult
         empty = SourceResult("elasticsearch", "logs", "empty", evidence=[])
         self.assertEqual(_trace_ids_from_evidence([empty]), [])
 

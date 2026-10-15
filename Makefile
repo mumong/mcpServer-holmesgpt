@@ -10,8 +10,9 @@ VERSION ?= $(shell cat VERSION)
 DOCKER_TAG := $(VERSION)
 # 优先使用项目虚拟环境；版本下限见 pyproject.toml requires-python
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+RUFF ?= .venv/bin/ruff
 
-.PHONY: build push build-push deploy delete restart reload logs status sync-version run run-local list test test-unit check check-syntax help
+.PHONY: build push build-push deploy delete restart reload logs status sync-version run run-local list test test-unit check check-syntax lint format format-check help
 
 # ============================================================
 # Docker
@@ -109,7 +110,19 @@ test-unit:
 check-syntax:
 	$(PYTHON) -B scripts/check_syntax.py
 
-check: check-syntax test-unit
+LINT_PATHS := servers start.py launch_config.py mcp_client.py tests scripts
+
+# ruff E9/F/I/B (pyproject.toml); format uses ruff format, line length 110.
+lint:
+	$(RUFF) check $(LINT_PATHS)
+
+format:
+	$(RUFF) format $(LINT_PATHS)
+
+format-check:
+	$(RUFF) format --check $(LINT_PATHS)
+
+check: check-syntax lint format-check test-unit
 
 # 显示帮助
 help:

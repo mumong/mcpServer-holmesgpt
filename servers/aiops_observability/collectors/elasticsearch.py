@@ -14,11 +14,10 @@ import time
 from typing import Any
 from urllib.parse import urljoin
 
+from .. import _http
 from ..config import get_config
 from ..schemas import EvidenceItem, SourceResult, evidence_id
 from . import _kube
-
-from .. import _http
 
 try:
     import requests

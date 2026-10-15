@@ -543,7 +543,6 @@ class CanonicalFactLedgerTests(unittest.TestCase):
         raw = common.dump_bounded_result(payload)
         published = json.loads(raw)
         ledger = published["fact_ledger"]
-        scope_id = ledger["scope_entity_ids"][0]
         records = [
             record
             for record in ledger["records"]
@@ -703,7 +702,6 @@ class CanonicalFactLedgerTests(unittest.TestCase):
     def test_lossless_topology_ledger_preserves_exact_scope_with_typed_alias(self):
         raw = common.dump_bounded_result(_max_identifier_topology_payload())
         result = json.loads(raw)
-        scope_id = result["fact_ledger"]["scope_entity_ids"][0]
         records = [
             record
             for record in result["fact_ledger"]["records"]

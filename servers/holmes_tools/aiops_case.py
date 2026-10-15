@@ -19,16 +19,13 @@ from servers.aiops_observability.case_builder import (
     get_evidence,
     search_cases,
 )
-from servers.aiops_observability.config import get_config, runtime_status
+from servers.aiops_observability.config import get_config
 from servers.aiops_observability.evidence_store import (
-    AGENT_VISIBLE_REF_FILES,
     EVIDENCE_FILES,
     line_count,
     read_jsonl,
-    read_yaml,
     safe_case_dir,
 )
-
 
 AGENT_VISIBLE_FILES = [
     "case.yaml",

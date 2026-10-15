@@ -13,9 +13,9 @@ import asyncio
 import hashlib
 import importlib
 import json
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "servers"))
@@ -115,15 +115,15 @@ class AdapterLoggingOrderTests(unittest.TestCase):
                     events = []
                     ticks = iter((10.0, 12.5))
 
-                    def clock():
+                    def clock(events=events, ticks=ticks):
                         events.append("clock")
                         return next(ticks)
 
-                    def handler(name, arguments):
+                    def handler(name, arguments, events=events, output=output):
                         events.append("handler")
                         return output
 
-                    def log_result(*args, **kwargs):
+                    def log_result(*args, events=events, catch_errors=catch_errors, output=output, **kwargs):
                         events.append("result")
                         self.assertEqual(args[3], 2.5)
                         self.assertEqual(
@@ -133,7 +133,7 @@ class AdapterLoggingOrderTests(unittest.TestCase):
                     with patch.object(self.adapter.time, "monotonic", clock):
                         self.adapter.call_text_tool(
                             "fixture", "example", {}, handler,
-                            log_call=lambda *args: events.append("call"),
+                            log_call=lambda *args, events=events: events.append("call"),
                             log_result=log_result, catch_errors=catch_errors,
                         )
                     self.assertEqual(

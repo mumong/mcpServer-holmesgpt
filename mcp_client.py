@@ -9,10 +9,10 @@ MCP SSE 客户端 - 用于连接和测试 MCP Server
 """
 
 import json
-import time
-import threading
 import sys
-from queue import Queue
+import threading
+import time
+
 import requests
 
 

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
-from ..schemas import EvidenceItem, SourceResult, evidence_id
-
 from .. import _http
+from ..schemas import EvidenceItem, SourceResult, evidence_id
 
 try:
     import requests
