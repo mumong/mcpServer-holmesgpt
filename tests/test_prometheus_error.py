@@ -67,3 +67,29 @@ class PrometheusErrorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetricNamesFilterTests(unittest.TestCase):
+    def test_contains_and_limit_bound_the_catalog(self):
+        payload = json.dumps(
+            {
+                "status": "success",
+                "data": [
+                    "node_memory_MemTotal_bytes",
+                    "node_memory_MemAvailable_bytes",
+                    "up",
+                    "node_cpu_seconds_total",
+                ],
+            }
+        )
+        with patch.object(prometheus, "_do_get", return_value=payload):
+            narrowed = json.loads(prometheus._run_get_metric_names({"contains": "NODE_MEMORY"}))
+            self.assertEqual(
+                narrowed["data"], ["node_memory_MemTotal_bytes", "node_memory_MemAvailable_bytes"]
+            )
+            self.assertEqual((narrowed["total"], narrowed["returned"], narrowed["truncated"]), (2, 2, False))
+            limited = json.loads(prometheus._run_get_metric_names({"limit": 1}))
+            self.assertEqual((limited["total"], limited["returned"], limited["truncated"]), (4, 1, True))
+            self.assertEqual(
+                json.loads(prometheus._run_get_metric_names({}))["data"][-1], "node_cpu_seconds_total"
+            )

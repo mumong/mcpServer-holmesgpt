@@ -167,8 +167,46 @@ def _do_post(path: str, data: Optional[Dict] = None) -> str:
         )
 
 
+METRIC_NAMES_DEFAULT_LIMIT = 200
+METRIC_NAMES_MAX_LIMIT = 2000
+
+
 def _run_get_metric_names(arguments: dict) -> str:
-    return _do_get("api/v1/label/__name__/values")
+    """Metric names, optionally narrowed by a case-insensitive substring.
+
+    1,400 names at once were summarised to a 76-name sample downstream and the model
+    re-issued the identical call to see more; ``contains`` lets it ask for the family it
+    needs (e.g. "node_memory") and ``limit`` keeps any answer bounded.
+    """
+    raw = _do_get("api/v1/label/__name__/values")
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+    names = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(names, list):
+        return raw
+    arguments = arguments or {}
+    needle = str(arguments.get("contains") or "").strip().lower()
+    if needle:
+        names = [n for n in names if needle in str(n).lower()]
+    try:
+        limit = int(arguments.get("limit") or METRIC_NAMES_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = METRIC_NAMES_DEFAULT_LIMIT
+    limit = max(1, min(METRIC_NAMES_MAX_LIMIT, limit))
+    shown = names[:limit]
+    return json.dumps(
+        {
+            "status": payload.get("status", "success"),
+            "total": len(names),
+            "returned": len(shown),
+            "truncated": len(names) > len(shown),
+            "contains": needle or None,
+            "data": shown,
+        },
+        ensure_ascii=False,
+    )
 
 
 def _run_get_label_values(arguments: dict) -> str:
@@ -243,8 +281,28 @@ def _schema_req(props: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
 TOOLS: List[Tool] = [
     Tool(
         name="get_metric_names",
-        description=_query_only_description("Get all metric names (label __name__ values)."),
-        inputSchema={"type": "object", "properties": {}},
+        description=_query_only_description(
+            "List metric names (label __name__ values). Pass contains to narrow to a family "
+            '(e.g. contains="node_memory"); results are bounded by limit (default 200) and '
+            "report total/returned/truncated. Repeating the same call returns the same list."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "contains": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": "Case-insensitive substring filter on the metric name.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2000,
+                    "default": 200,
+                    "description": "Maximum names to return.",
+                },
+            },
+        },
     ),
     Tool(
         name="get_label_values",

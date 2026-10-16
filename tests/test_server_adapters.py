@@ -29,7 +29,7 @@ TOOL_DIGESTS = {
     "k8s_core": "45004b99b97ddca8e96b5f9711ceaebade9854b89618aefbf304d7a7b5a6350a",
     "core_investigation": "7f6de113428773e638b42f7c5edc295a4af2bd1d0d71d3740a7891dbd78fa3eb",
     # Full rule catalog deliberately disabled; all seven remaining schemas unchanged.
-    "prometheus": "8c3602a33a62f5c8ed6a466ac69be4695a054842a1b61c53bf67197827714fed",
+    "prometheus": "71b7e127e7db27b8309aeb8c36da53a9f9813dfa1032681544f136bdad6caefe",
     "aiops_case": "5cd12701f0e76879be0b2c2cae32394b5a443bd95f33bb71a170c94ff80867cc",
     "aiops_observability_fine": "458f3ba25d7b9456cc3cf86e9199961446b02d38fb7f265224ed63d309fa07a3",
 }
