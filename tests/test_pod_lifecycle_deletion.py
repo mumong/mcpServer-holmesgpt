@@ -1,0 +1,46 @@
+"""Deleting Pods expose finalizers, grace period and how long they have been terminating.
+
+Live run cdaf41032a33484b: a Pod stuck 19 minutes behind a finalizer was diagnosed as
+"external deletion, not a fault" because no tool output ever contained the finalizer.
+"""
+
+import unittest
+from datetime import datetime, timezone
+
+from holmes_tools import pod_lifecycle, pod_record_query
+
+OBSERVED = datetime(2026, 10, 16, 11, 29, 19, tzinfo=timezone.utc)
+
+
+def _pod(deleting=True):
+    meta = {"namespace": "aiops-case-11", "name": "workload", "uid": "u1", "creationTimestamp": "2026-10-16T11:00:00Z"}
+    if deleting:
+        meta.update(deletionTimestamp="2026-10-16T11:10:19Z", deletionGracePeriodSeconds=0, finalizers=["aiops.lab/hold"])
+    return {"metadata": meta, "spec": {"nodeName": "node1"}, "status": {"phase": "Running", "conditions": [],
+            "containerStatuses": [{"name": "app", "ready": False, "restartCount": 0,
+                                   "state": {"terminated": {"reason": "Error", "exitCode": 137}}}]}}
+
+
+class DeletionFactsTests(unittest.TestCase):
+    def test_project_pod_exposes_deletion_facts(self):
+        row = pod_lifecycle.project_pod(_pod(), OBSERVED, 30)
+        self.assertEqual(row["finalizers"], ["aiops.lab/hold"])
+        self.assertEqual(row["deletion_grace_period_seconds"], 0)
+        self.assertEqual(row["terminating_seconds"], 19 * 60)
+
+    def test_live_pod_has_empty_deletion_facts(self):
+        row = pod_lifecycle.project_pod(_pod(deleting=False), OBSERVED, 30)
+        self.assertEqual(row["finalizers"], [])
+        self.assertIsNone(row["terminating_seconds"])
+        self.assertIsNone(row["deletion_grace_period_seconds"])
+
+    def test_record_defaults_include_deletion_facts(self):
+        for kind in ("pod", "container"):
+            self.assertIn("terminating_seconds", pod_record_query.DEFAULT_FIELDS[kind])
+            self.assertIn("finalizers", pod_record_query.DEFAULT_FIELDS[kind])
+        self.assertIn("finalizers", pod_record_query.NON_SCALAR_FIELDS)
+        self.assertIn("terminating_seconds", pod_record_query.POD_FIELDS)
+
+
+if __name__ == "__main__":
+    unittest.main()

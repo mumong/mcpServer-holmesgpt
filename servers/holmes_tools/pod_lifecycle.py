@@ -139,12 +139,21 @@ def project_pod(pod, observed_at, window_minutes):
                     "resources": specs.get(name, {}).get("resources", {}),
                 }
             )
+    # Deletion facts: a Pod past its grace period that still exists is blocked by
+    # something (finalizers, kubelet, volume detach); expose the facts, not a verdict.
+    deletion_at = _timestamp(metadata.get("deletionTimestamp"))
+    terminating_seconds = (
+        max(0, int((observed_at - deletion_at).total_seconds())) if deletion_at else None
+    )
     return {
         "namespace": metadata.get("namespace"),
         "name": metadata.get("name"),
         "uid": metadata.get("uid"),
         "created_at": metadata.get("creationTimestamp"),
         "deletion_timestamp": metadata.get("deletionTimestamp"),
+        "deletion_grace_period_seconds": metadata.get("deletionGracePeriodSeconds"),
+        "terminating_seconds": terminating_seconds,
+        "finalizers": list(metadata.get("finalizers") or []),
         "node": spec.get("nodeName"),
         "phase": status.get("phase"),
         "reason": status.get("reason"),

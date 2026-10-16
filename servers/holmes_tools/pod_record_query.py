@@ -13,6 +13,9 @@ POD_FIELDS = [
     "reason",
     "created_at",
     "deletion_timestamp",
+    "deletion_grace_period_seconds",
+    "terminating_seconds",
+    "finalizers",
     "conditions",
     "ready",
     "condition_states",
@@ -33,9 +36,9 @@ CONTAINER_FIELDS = POD_FIELDS + [
     "resources",
     "current_state",
 ]
-NON_SCALAR_FIELDS = {"conditions", "condition_states", "state", "current_state", "last_state", "resources"}
+NON_SCALAR_FIELDS = {"conditions", "condition_states", "state", "current_state", "last_state", "resources", "finalizers"}
 DEFAULT_FIELDS = {
-    "pod": ["namespace", "pod", "uid", "node", "phase", "ready", "deletion_timestamp", "condition_states"],
+    "pod": ["namespace", "pod", "uid", "node", "phase", "ready", "deletion_timestamp", "terminating_seconds", "finalizers", "condition_states"],
     "container": [
         "namespace",
         "pod",
@@ -47,6 +50,8 @@ DEFAULT_FIELDS = {
         "node",
         "phase",
         "deletion_timestamp",
+        "terminating_seconds",
+        "finalizers",
         "last_termination_reason",
         "last_exit_code",
         "restart_count_total",
