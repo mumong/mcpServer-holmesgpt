@@ -98,14 +98,21 @@ def validate_promql_scope(
                 "error_code": "missing_pod_scope",
                 "error": (
                     "every PromQL vector selector must contain exact matchers "
-                    f'namespace="{namespace}" and pod="{pod}"'
+                    f'namespace="{namespace}" and pod="{pod}". '
+                    "This tool reads ONE Pod's metrics; for node, cluster or namespace "
+                    "level metrics use execute_prometheus_instant_query / "
+                    "execute_prometheus_range_query instead of adding Pod labels"
                 ),
             }
 
     if not selector_spans:
         return {
             "error_code": "missing_pod_scope",
-            "error": "PromQL must contain at least one Pod-scoped vector selector",
+            "error": (
+                "PromQL must contain at least one Pod-scoped vector selector; this tool reads "
+                "ONE Pod's metrics - node/cluster level queries belong to "
+                "execute_prometheus_instant_query / execute_prometheus_range_query"
+            ),
         }
 
     label_list_spans = [
@@ -141,7 +148,11 @@ def validate_promql_scope(
             continue
         return {
             "error_code": "missing_pod_scope",
-            "error": f"unscoped vector selector is not allowed: {token}",
+            "error": (
+                f"unscoped vector selector is not allowed: {token}. This tool reads ONE "
+                "Pod's metrics; node/cluster level queries belong to "
+                "execute_prometheus_instant_query / execute_prometheus_range_query"
+            ),
         }
     return None
 
