@@ -8,6 +8,7 @@ kubectl_top_pods, kubectl_top_nodes, get_prometheus_target, kubectl_lineage_chil
 依赖：kubectl、jq（部分工具）、jinja2。
 """
 
+import re
 from typing import Any, Dict, List, Optional
 
 from mcp.types import Tool
@@ -127,10 +128,37 @@ def _normalize_kubectl_args(args: dict) -> dict:
     return out
 
 
+def normalize_custom_columns(spec: str) -> str:
+    """Make a custom-columns spec acceptable to kubectl.
+
+    kubectl requires ``HEADER:.json.path`` per column. Models often pass bare
+    paths (``metadata.name``); the header is derived from the last path word and
+    the leading dot is added. Well-formed columns are left untouched.
+    """
+    columns: List[str] = []
+    headers: Dict[str, int] = {}
+    for raw in str(spec or "").split(","):
+        column = raw.strip()
+        if not column:
+            continue
+        if ":" in column:
+            columns.append(column)
+            continue
+        path = column if column.startswith(".") else "." + column
+        words = re.findall(r"[A-Za-z0-9_]+", path.rsplit(".", 1)[-1]) or ["COL"]
+        header = words[0].upper()
+        seen = headers.get(header, 0) + 1
+        headers[header] = seen
+        columns.append(f"{header if seen == 1 else f'{header}{seen}'}:{path}")
+    return ",".join(columns)
+
+
 def _run_kubernetes(name: str, arguments: dict) -> Optional[str]:
     if name == "query_pod_lifecycle":
         return pod_lifecycle.query(arguments)
     args = _normalize_kubectl_args(arguments)
+    if name == "kubernetes_tabular_query" and args.get("columns"):
+        args["columns"] = normalize_custom_columns(args["columns"])
     if name == "kubernetes_jq_query":
         return run_script(_KUBERNETES_JQ_SCRIPT, args, timeout=180)
     if name == "kubernetes_count":
@@ -301,7 +329,7 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="kubernetes_tabular_query",
-        description="Tabular output: kubectl get <kind> -A -o custom-columns=<columns>. Optional filter_pattern for grep.",
+        description="Tabular output: kubectl get <kind> -A -o custom-columns=<columns>. columns is comma-separated HEADER:.json.path (e.g. NAME:.metadata.name,NODE:.spec.nodeName); bare paths get a derived header. Optional filter_pattern for grep.",
         inputSchema=_input_schema(
             ["kind", "columns"],
             {"kind": {"type": "string"}, "columns": {"type": "string"}, "filter_pattern": {"type": "string"}},

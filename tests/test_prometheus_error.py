@@ -41,8 +41,8 @@ class PrometheusErrorTests(unittest.TestCase):
         self.assertEqual({tool.name for tool in prometheus.TOOLS}, expected)
         with patch.object(prometheus, "_do_get", return_value='{"status":"success"}') as get:
             self.assertEqual(
-                prometheus.call_tool("execute_prometheus_instant_query", {"query": "up"}),
-                '{"status":"success"}',
+                json.loads(prometheus.call_tool("execute_prometheus_instant_query", {"query": "up"})),
+                {"status": "success", "query": "up"},
             )
             get.assert_called_once_with("api/v1/query", params={"query": "up"})
 

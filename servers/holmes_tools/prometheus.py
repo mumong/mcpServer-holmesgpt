@@ -241,6 +241,23 @@ def _run_get_metric_metadata(arguments: dict) -> str:
     return _do_get("api/v1/metadata", params={"metric": metric})
 
 
+def _with_query_echo(response_text: str, query: str) -> str:
+    """Add the asked expression to a successful payload.
+
+    A bare result vector does not say what it measures; error payloads already
+    carry ``query`` and success payloads now do too. Anything that is not a
+    success JSON object is returned unchanged.
+    """
+    try:
+        payload = json.loads(response_text)
+    except Exception:
+        return response_text
+    if not isinstance(payload, dict) or payload.get("status") != "success" or "query" in payload:
+        return response_text
+    payload["query"] = query
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _run_execute_prometheus_instant_query(arguments: dict) -> str:
     query = arguments.get("query")
     if not query:
@@ -249,7 +266,7 @@ def _run_execute_prometheus_instant_query(arguments: dict) -> str:
     params = {"query": query}
     if time:
         params["time"] = time
-    return _do_get("api/v1/query", params=params)
+    return _with_query_echo(_do_get("api/v1/query", params=params), query)
 
 
 def _run_execute_prometheus_range_query(arguments: dict) -> str:
@@ -260,7 +277,7 @@ def _run_execute_prometheus_range_query(arguments: dict) -> str:
     if not query:
         return json.dumps({"error": "query is required"})
     data = {"query": query, "start": start, "end": end, "step": step}
-    return _do_post("api/v1/query_range", data=data)
+    return _with_query_echo(_do_post("api/v1/query_range", data=data), query)
 
 
 _HANDLERS: Dict[str, Callable[..., str]] = {

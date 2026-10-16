@@ -77,7 +77,7 @@ class LifecycleTests(unittest.TestCase):
         serialized = json.dumps(existing, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         self.assertEqual(
             hashlib.sha256(serialized.encode()).hexdigest(),
-            "21e708424ad185dfd3344b30faf1b4e9bf687821656373757f9c3311b0a3e504",
+            "71968e39e47573fd7b3e49ccf4dd4b2dd0357af49c59b50318c4b9f5921940c7",
         )
 
     def test_recovered_oom_still_has_evidence(self):
