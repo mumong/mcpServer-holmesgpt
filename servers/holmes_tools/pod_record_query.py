@@ -36,6 +36,7 @@ CONTAINER_FIELDS = POD_FIELDS + [
     "resources",
     "current_state",
 ]
+CONTAINER_ONLY_FIELDS = [f for f in CONTAINER_FIELDS if f not in POD_FIELDS]
 NON_SCALAR_FIELDS = {"conditions", "condition_states", "state", "current_state", "last_state", "resources", "finalizers"}
 DEFAULT_FIELDS = {
     "pod": ["namespace", "pod", "uid", "node", "phase", "ready", "deletion_timestamp", "terminating_seconds", "finalizers", "condition_states"],
@@ -135,6 +136,7 @@ def prepare(arguments):
     if kind not in ("pod", "container"):
         raise ValueError("record_type must be pod or container")
     query = {k: arguments[k] for k in QUERY_KEYS if k in arguments}
+    kind, query, notes = _lenient(kind, query)
     parsed = validate_query(query, POD_FIELDS if kind == "pod" else CONTAINER_FIELDS, DEFAULT_FIELDS[kind])
     if parsed.get("group_by") in NON_SCALAR_FIELDS:
         fields = POD_FIELDS if kind == "pod" else CONTAINER_FIELDS
@@ -143,7 +145,39 @@ def prepare(arguments):
     limit = int(os.getenv("AIOPS_RECORD_RESULT_MAX_BYTES", "12000"))
     if not 1024 <= limit <= 65536:
         raise ValueError("AIOPS_RECORD_RESULT_MAX_BYTES must be between 1024 and 65536")
-    return kind, parsed, limit
+    return kind, parsed, limit, notes
+
+
+def _lenient(kind, query):
+    """Repair field names that cannot change the result's meaning; report every repair.
+
+    Container rows carry every Pod-level field, so a Pod query that names container-level
+    fields (state, restarts, exit codes) is answered with container rows instead of
+    failing. Unknown names in ``fields`` are dropped while others remain. Filters and
+    group_by on unknown names still fail: dropping them would silently change the rows.
+    """
+    notes = []
+    where = query.get("where") if isinstance(query.get("where"), list) else []
+    referenced = {f for f in query.get("fields") or [] if isinstance(f, str)}
+    referenced |= {c.get("field") for c in where if isinstance(c, dict)}
+    if isinstance(query.get("group_by"), str):
+        referenced.add(query["group_by"])
+    promoted = sorted(referenced & set(CONTAINER_ONLY_FIELDS))
+    if kind == "pod" and promoted:
+        kind = "container"
+        notes.append(
+            f"请求包含容器级字段 {', '.join(promoted)}，已按 record_type=container 返回"
+            "（每行一个容器，Pod 级字段同样保留）"
+        )
+    fields = query.get("fields")
+    if isinstance(fields, list) and fields:
+        known = POD_FIELDS if kind == "pod" else CONTAINER_FIELDS
+        kept = [f for f in fields if isinstance(f, str) and f in known]
+        dropped = [f for f in fields if not (isinstance(f, str) and f in known)]
+        if kept and dropped:
+            query = {**query, "fields": kept}
+            notes.append(f"已忽略不存在的字段 {', '.join(map(str, dropped))}；可用字段：{', '.join(known)}")
+    return kind, query, notes
 
 
 def lifecycle_rows(payload, kind):
@@ -191,7 +225,7 @@ def error_result(message, arguments, source=None):
 
 
 def project(payload, prepared, arguments):
-    kind, query, limit = prepared
+    kind, query, limit, notes = prepared
     try:
         if payload.get("status") != "success":
             return error_result(payload.get("error", "source_not_successful"), arguments, payload)
@@ -207,6 +241,7 @@ def project(payload, prepared, arguments):
             "record_unit": kind,
             "executed_query": arguments,
             "source_metadata": {k: payload[k] for k in SOURCE_KEYS if k in payload},
+            **({"query_adjustments": notes} if notes else {}),
             **selected,
         }
         from .record_pages import paginate

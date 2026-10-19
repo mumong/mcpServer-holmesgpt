@@ -178,3 +178,36 @@ class RecordQueryTests(unittest.TestCase):
         result = self.call({"record_type": "container", "fields": ["ready"]}, payload)
         self.assertEqual([r["role"] for r in result["rows"]], ["app", "app", "init"])
         self.assertIsNone(result["rows"][-1]["ready"])
+
+
+class LenientFieldTests(unittest.TestCase):
+    """Live 2026-10-19: small models mix Pod- and container-level names on record_type=pod
+    (b9df540f, 411cbba3, 5854968c, 3c052423, 7e55538b); the whole query failed and the
+    healthy check never got a complete inventory."""
+
+    call = RecordQueryTests.call
+
+    def test_container_fields_on_pod_rows_promote_to_container_rows(self):
+        result = self.call({"record_type": "pod", "fields": ["namespace", "pod", "phase", "restart_count_in_window", "last_exit_code"]})
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["record_unit"], "container")
+        self.assertEqual(len(result["rows"]), 2)
+        self.assertEqual({r["container"] for r in result["rows"]}, {"app", "sidecar"})
+        self.assertIn("record_type=container", " ".join(result["query_adjustments"]))
+
+    def test_container_filter_on_pod_rows_promotes_too(self):
+        result = self.call({"record_type": "pod", "where": [{"field": "last_exit_code", "op": "eq", "value": 137}]})
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["record_unit"], "container")
+        self.assertEqual(result["matched_rows"], 1)
+
+    def test_unknown_names_are_dropped_with_a_note_when_others_remain(self):
+        result = self.call({"record_type": "pod", "fields": ["namespace", "pod", "phase", "no_such_field"]})
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["record_unit"], "pod")
+        self.assertNotIn("no_such_field", result["rows"][0])
+        self.assertIn("no_such_field", " ".join(result["query_adjustments"]))
+
+    def test_plain_valid_query_has_no_adjustments(self):
+        result = self.call({"record_type": "pod", "group_by": "node"})
+        self.assertNotIn("query_adjustments", result)
