@@ -69,6 +69,20 @@ class DeletionFactsTests(unittest.TestCase):
                              "fields": ["container", "state"]}, pod)
         self.assertIs(out["rows"][0]["stopped_by_pod_deletion"], False)
 
+    def test_every_row_matches_the_columns_when_one_pod_is_deleting(self):
+        # Live run e2c569f8c44746ea: only the deleting Pod's row got the sticky keys, the
+        # consumer's row/column contract check failed and the page was treated as an error.
+        prepared_args = {"record_type": "container"}
+        live = _pod(deleting=False)
+        live["metadata"]["name"] = "other"
+        payload = {"status": "success", "coverage": "present",
+                   "pods": [pod_lifecycle.project_pod(_pod(), OBSERVED, 30),
+                            pod_lifecycle.project_pod(live, OBSERVED, 30)]}
+        out = pod_record_query.project(payload, pod_record_query.prepare(prepared_args), prepared_args)
+        self.assertIn("stopped_by_pod_deletion", out["columns"])
+        for row in out["rows"]:
+            self.assertEqual(set(row), set(out["columns"]))
+
     def test_live_pods_do_not_grow_sticky_columns(self):
         out = self._records({"record_type": "container", "fields": ["container", "state"]}, _pod(deleting=False))
         self.assertNotIn("deletion_timestamp", out["columns"])

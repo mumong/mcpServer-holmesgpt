@@ -241,22 +241,22 @@ def lifecycle_rows(payload, kind):
 
 
 def _keep_deletion_facts(selected, rows, kind):
-    """Add the deletion facts to the selected rows of Pods that are being deleted."""
+    """When a selected row's Pod is being deleted, add the deletion facts as columns.
+
+    Every row gets the added columns (null/[] for Pods that are not being deleted), so
+    rows and columns stay one shape: consumers reject a page whose rows differ.
+    """
     if selected.get("result_type") != "records":
         return
     sticky = CONTAINER_DELETION_FIELDS if kind == "container" else DELETION_FIELDS
     identity = ("namespace", "pod", "container") if kind == "container" else ("namespace", "pod")
-    deleting = {
-        tuple(row.get(f) for f in identity): row for row in rows if row.get("deletion_timestamp")
-    }
-    added = False
-    for row in selected["rows"]:
-        source = deleting.get(tuple(row.get(f) for f in identity))
-        if source is not None:
-            row.update({f: source.get(f) for f in sticky})
-            added = True
-    if added:
-        selected["columns"] = list(dict.fromkeys([*selected["columns"], *sticky]))
+    by_identity = {tuple(row.get(f) for f in identity): row for row in rows}
+    sources = [by_identity.get(tuple(row.get(f) for f in identity)) or {} for row in selected["rows"]]
+    if not any(source.get("deletion_timestamp") for source in sources):
+        return
+    for row, source in zip(selected["rows"], sources, strict=True):
+        row.update({f: source.get(f) for f in sticky if f not in row})
+    selected["columns"] = list(dict.fromkeys([*selected["columns"], *sticky]))
 
 
 def error_result(message, arguments, source=None):
