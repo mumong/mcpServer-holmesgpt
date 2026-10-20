@@ -105,7 +105,8 @@ data:
         enabled: true
         # 黑名单：只填敏感命令名，逗号分隔即可（可选；不填则使用内置危险命令黑名单）
         env:
-          BASH_BLOCKED_COMMANDS: "rm,dd,mkfs,fdisk,parted,shred,reboot,halt,poweroff,shutdown"
+          # 与 robusta workflow.remediation.denied_executables 保持同一份核心危险命令名单
+          BASH_BLOCKED_COMMANDS: "rm,dd,mkfs,fdisk,sfdisk,parted,wipefs,blkdiscard,shred,reboot,halt,poweroff,shutdown"
       
       - name: prometheus
         path: "servers/prometheus_server.py"

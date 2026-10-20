@@ -68,6 +68,31 @@ DEFAULT_FIELDS = {
 # a finalizer-blocked Pod as an application exit.
 DELETION_FIELDS = ["deletion_timestamp", "terminating_seconds", "finalizers"]
 CONTAINER_DELETION_FIELDS = DELETION_FIELDS + ["stopped_by_pod_deletion"]
+# Names callers write for a field that exists under another name; resolved, never guessed.
+FIELD_ALIASES = {
+    "ns": "namespace",
+    "name": "pod",
+    "pod_name": "pod",
+    "node_name": "node",
+    "container_name": "container",
+    "restarts": "restart_count_total",
+    "exit_code": "last_exit_code",
+}
+# Fields whose values separate a broken Pod from a healthy one; ``phase`` alone does not.
+HEALTH_FIELDS = {
+    "ready", "deletion_timestamp", "terminating_seconds", "finalizers", "condition_states", "conditions",
+    "state", "current_state", "last_state", "restart_count_total", "restart_count_in_window",
+    "termination_within_window", "last_termination_reason", "last_exit_code", "stopped_by_pod_deletion",
+}
+PHASE_CAVEAT = (
+    "phase=Running 也包含 NotReady、反复重启（CrashLoopBackOff）和 Terminating 中的 Pod；"
+    "判断异常请结合 ready、restart_count_total、deletion_timestamp、current_state"
+)
+ABNORMAL_FIRST_NOTE = (
+    "Rows are ordered abnormal-first (deleting, not ready, phase other than Running/Succeeded, "
+    "waiting/terminated container, termination within window) and then in source order, "
+    "so the first page holds the anomalies when they fit."
+)
 SOURCE_KEYS = (
     "contract_version",
     "status",
@@ -93,7 +118,9 @@ DESCRIPTION = (
     " Optional record_type (pod|container) returns chosen fields instead of the full snapshot: pod rows = "
     "Pod identity/phase/conditions; container rows add readiness, restarts, termination (incl. init/ephemeral). "
     "where filters the SAME row (match all|any); group_by returns exact counts over this page only. "
-    "Missing values stay null (unknown). Rows of a Pod being deleted always carry deletion_timestamp, "
+    "Missing values stay null (unknown). Record pages list abnormal Pods first (deleting, not ready, "
+    "non-Running phase, waiting/terminated, recent termination), then healthy ones; phase alone does not "
+    "tell them apart. Rows of a Pod being deleted always carry deletion_timestamp, "
     "terminating_seconds, finalizers and (container rows) stopped_by_pod_deletion = the container ended "
     "after the deletion was requested. Example count: record_type=pod, group_by=node."
 )
@@ -145,20 +172,36 @@ def prepare(arguments):
     kind = arguments.get("record_type", "pod")
     if kind not in ("pod", "container"):
         raise ValueError("record_type must be pod or container")
+    arguments, notes = canonical_arguments(arguments)
     query = {k: arguments[k] for k in QUERY_KEYS if k in arguments}
-    kind, query, notes = _lenient(kind, query)
-    parsed = validate_query(query, POD_FIELDS if kind == "pod" else CONTAINER_FIELDS, DEFAULT_FIELDS[kind])
-    if parsed.get("group_by") in NON_SCALAR_FIELDS:
-        fields = POD_FIELDS if kind == "pod" else CONTAINER_FIELDS
-        scalar = ", ".join(f for f in fields if f not in NON_SCALAR_FIELDS)
-        raise ValueError(f"group_by requires a scalar field; available for {kind} rows: {scalar}")
+    kind, query, notes = _lenient(kind, query, notes)
+    known = POD_FIELDS if kind == "pod" else CONTAINER_FIELDS
+    group_by = query.get("group_by")
+    if "group_by" in query and (group_by in NON_SCALAR_FIELDS or group_by not in known):
+        scalar = ", ".join(f for f in known if f not in NON_SCALAR_FIELDS)
+        raise ValueError(f"group_by must name a scalar field; available for {kind} rows: {scalar}")
+    parsed = validate_query(query, known, DEFAULT_FIELDS[kind])
     limit = int(os.getenv("AIOPS_RECORD_RESULT_MAX_BYTES", "12000"))
     if not 1024 <= limit <= 65536:
         raise ValueError("AIOPS_RECORD_RESULT_MAX_BYTES must be between 1024 and 65536")
-    return kind, parsed, limit, notes
+    return kind, parsed, limit, notes, arguments
 
 
-def _lenient(kind, query):
+def canonical_arguments(arguments):
+    """Arguments as executed: aliases resolved, empty group_by dropped; notes say what changed.
+
+    Applied before the page fingerprint, so a continuation call written with the same
+    alias still matches its snapshot, and ``executed_query`` echoes real field names.
+    """
+    notes = []
+    out = _resolve_aliases(dict(arguments or {}), notes)
+    if "group_by" in out and out["group_by"] in ("", None):
+        out.pop("group_by")
+        notes.append("已忽略空的 group_by，按记录行返回")
+    return out, notes
+
+
+def _lenient(kind, query, notes=None):
     """Repair field names that cannot change the result's meaning; report every repair.
 
     Container rows carry every Pod-level field, so a Pod query that names container-level
@@ -166,7 +209,7 @@ def _lenient(kind, query):
     failing. Unknown names in ``fields`` are dropped while others remain. Filters and
     group_by on unknown names still fail: dropping them would silently change the rows.
     """
-    notes = []
+    notes = list(notes or [])
     where = query.get("where") if isinstance(query.get("where"), list) else []
     referenced = {f for f in query.get("fields") or [] if isinstance(f, str)}
     referenced |= {c.get("field") for c in where if isinstance(c, dict)}
@@ -187,7 +230,53 @@ def _lenient(kind, query):
         if kept and dropped:
             query = {**query, "fields": kept}
             notes.append(f"已忽略不存在的字段 {', '.join(map(str, dropped))}；可用字段：{', '.join(known)}")
+    deciding = {c.get("field") for c in where if isinstance(c, dict)}
+    if isinstance(query.get("group_by"), str):
+        deciding.add(query["group_by"])
+    if "phase" in deciding and not deciding & HEALTH_FIELDS:
+        notes.append(PHASE_CAVEAT)
     return kind, query, notes
+
+
+def _resolve_aliases(query, notes):
+    """Map alias names in fields / where / group_by to the real field; note each one."""
+    used = []
+
+    def real(name):
+        if isinstance(name, str) and name in FIELD_ALIASES:
+            used.append(f"{name}→{FIELD_ALIASES[name]}")
+            return FIELD_ALIASES[name]
+        return name
+
+    out = dict(query)
+    if isinstance(out.get("fields"), list):
+        out["fields"] = [real(f) for f in out["fields"]]
+    if isinstance(out.get("where"), list):
+        out["where"] = [
+            {**c, "field": real(c.get("field"))} if isinstance(c, dict) else c for c in out["where"]
+        ]
+    if isinstance(out.get("group_by"), str):
+        out["group_by"] = real(out["group_by"])
+    if used:
+        notes.append("字段别名已换成实际字段名：" + ", ".join(dict.fromkeys(used)))
+    return out
+
+
+def _is_abnormal(row):
+    """True when the row shows a problem by Kubernetes facts, not by phase alone."""
+    if row.get("deletion_timestamp") or row.get("ready") is False:
+        return True
+    if row.get("phase") not in (None, "Running", "Succeeded"):
+        return True
+    state = row.get("state") or {}
+    if isinstance(state, dict) and ("waiting" in state or "terminated" in state):
+        return True
+    return row.get("termination_within_window") is True
+
+
+def abnormal_first(rows):
+    """Stable: abnormal rows keep their source order and come before healthy ones."""
+    return [r for r in rows if _is_abnormal(r)] + [r for r in rows if not _is_abnormal(r)]
 
 
 def _parse_time(value):
@@ -271,24 +360,28 @@ def error_result(message, arguments, source=None):
 
 
 def project(payload, prepared, arguments):
-    kind, query, limit, notes = prepared
+    kind, query, limit, notes, arguments = prepared
     try:
         if payload.get("status") != "success":
             return error_result(payload.get("error", "source_not_successful"), arguments, payload)
-        rows = lifecycle_rows(payload, kind)
+        rows = abnormal_first(lifecycle_rows(payload, kind))
         selected = select_records(
             rows,
             query,
             ["namespace", "pod", "uid"] + (["container", "role"] if kind == "container" else []),
         )
         _keep_deletion_facts(selected, rows, kind)
+        source = {k: payload[k] for k in SOURCE_KEYS if k in payload}
+        if selected.get("result_type") == "records":
+            source["limitations"] = [*(source.get("limitations") or []), ABNORMAL_FIRST_NOTE]
         packet = {
             "contract_version": CONTRACT_VERSION,
             "status": "success",
             "coverage": payload["coverage"],
             "record_unit": kind,
             "executed_query": arguments,
-            "source_metadata": {k: payload[k] for k in SOURCE_KEYS if k in payload},
+            "source_metadata": source,
+            **({"row_order": "abnormal_first"} if selected.get("result_type") == "records" else {}),
             **({"query_adjustments": notes} if notes else {}),
             **selected,
         }

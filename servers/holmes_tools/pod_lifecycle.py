@@ -180,6 +180,8 @@ def query(arguments):
     try:
         arguments = arguments or {}
         prepared = pod_record_query.prepare(arguments)
+        if prepared:
+            arguments = prepared[4]  # aliases resolved: the fingerprint and echo use real names
         from .record_pages import PREFIX, read
 
         if str(arguments.get("continue_token") or "").startswith(PREFIX):

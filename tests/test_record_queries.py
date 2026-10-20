@@ -211,3 +211,84 @@ class LenientFieldTests(unittest.TestCase):
     def test_plain_valid_query_has_no_adjustments(self):
         result = self.call({"record_type": "pod", "group_by": "node"})
         self.assertNotIn("query_adjustments", result)
+
+
+def _pod(ns, name, *, phase="Running", ready=True, deleting=False, state=None, restarts=0, finished=None):
+    meta = {"namespace": ns, "name": name, "uid": name}
+    if deleting:
+        meta.update(deletionTimestamp="2026-10-20T03:04:45Z", finalizers=["aiops.lab/hold"])
+    status = {"name": "app", "ready": ready, "restartCount": restarts, "state": state or {"running": {}}, "lastState": {}}
+    if finished:
+        status["lastState"] = {"terminated": {"reason": "Error", "exitCode": 1, "finishedAt": finished}}
+    return {
+        "metadata": meta,
+        "spec": {"nodeName": "n", "containers": [{"name": "app"}]},
+        "status": {"phase": phase, "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+                   "containerStatuses": [status]},
+    }
+
+
+def cluster_fixture():
+    """Healthy Pods sort first alphabetically; the anomalies live in the last namespaces."""
+    items = [_pod("aaa-system", f"healthy-{i:02d}") for i in range(30)]
+    items += [
+        _pod("zz-case-04", "pending", phase="Pending", ready=False, state={"waiting": {"reason": "CreateContainerConfigError"}}),
+        _pod("zz-case-06", "crash", ready=False, restarts=7, state={"waiting": {"reason": "CrashLoopBackOff"}}),
+        _pod("zz-case-09", "notready", ready=False),
+        _pod("zz-case-11", "deleting", ready=False, deleting=True, state={"terminated": {"exitCode": 137}}),
+    ]
+    return {"kind": "PodList", "metadata": {"resourceVersion": "v1"}, "items": items}
+
+
+class StableClusterScanTests(unittest.TestCase):
+    """Live runs 52821169883547df / d852a86dcead4dee: a cluster-wide page held 22 of 109 rows,
+    the model read only page one (alphabetical) and missed anomalies in later namespaces;
+    ``group_by: "ns"`` / ``""`` errored without saying what is available."""
+
+    call = RecordQueryTests.call
+
+    def test_first_page_holds_the_anomalies_before_the_healthy_rows(self):
+        with patch.dict(os.environ, {"AIOPS_RECORD_RESULT_MAX_BYTES": "4000"}):
+            page = self.call({"record_type": "container"}, cluster_fixture())
+        self.assertEqual(page["status"], "success")
+        self.assertEqual(page["coverage"], "partial")
+        self.assertLess(page["pagination"]["returned_rows"], 34)
+        names = [row["pod"] for row in page["rows"]]
+        self.assertEqual(names[:4], ["pending", "crash", "notready", "deleting"])
+        self.assertIn("abnormal", " ".join(page["source_metadata"]["limitations"]).lower())
+        self.assertEqual(page["row_order"], "abnormal_first")
+
+    def test_pod_rows_are_ordered_the_same_way(self):
+        page = self.call({"record_type": "pod", "fields": ["namespace", "pod", "phase", "ready"]}, cluster_fixture())
+        self.assertEqual([r["pod"] for r in page["rows"][:4]], ["pending", "crash", "notready", "deleting"])
+        self.assertEqual(page["matched_rows"], 34)
+
+    def test_field_aliases_are_accepted_and_reported(self):
+        result = self.call({"record_type": "pod", "group_by": "ns"}, cluster_fixture())
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result_type"], "groups")
+        self.assertEqual({g["namespace"] for g in result["groups"]}, {"aaa-system", "zz-case-04", "zz-case-06", "zz-case-09", "zz-case-11"})
+        self.assertIn("ns", " ".join(result["query_adjustments"]))
+        rows = self.call({"record_type": "pod", "fields": ["ns", "name"], "where": [{"field": "name", "op": "eq", "value": "crash"}]}, cluster_fixture())
+        self.assertEqual(rows["matched_rows"], 1)
+        self.assertEqual(rows["rows"][0]["namespace"], "zz-case-06")
+
+    def test_empty_group_by_is_ignored_and_unknown_group_by_lists_scalar_fields(self):
+        result = self.call({"record_type": "container", "group_by": ""}, cluster_fixture())
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result_type"], "records")
+        self.assertIn("group_by", " ".join(result["query_adjustments"]))
+        bad = self.call({"record_type": "container", "group_by": ":string:1:1:1"}, cluster_fixture())
+        self.assertEqual(bad["status"], "error")
+        self.assertIn("namespace", bad["error"])
+        self.assertIn("node", bad["error"])
+        self.assertNotIn("condition_states", bad["error"])
+
+    def test_phase_only_filters_get_a_kubernetes_caveat(self):
+        result = self.call({"record_type": "pod", "where": [{"field": "phase", "op": "ne", "value": "Running"}]}, cluster_fixture())
+        self.assertEqual(result["matched_rows"], 1)
+        self.assertIn("NotReady", " ".join(result["query_adjustments"]))
+        grouped = self.call({"record_type": "pod", "group_by": "phase"}, cluster_fixture())
+        self.assertIn("NotReady", " ".join(grouped["query_adjustments"]))
+        fine = self.call({"record_type": "pod", "where": [{"field": "ready", "op": "ne", "value": True}]}, cluster_fixture())
+        self.assertNotIn("query_adjustments", fine)
