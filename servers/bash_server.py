@@ -147,8 +147,10 @@ def _executing_tokens(text: str) -> list:
     out = []
     for token in tokens:
         out.append(token)
-        if any(ch in token for ch in " ;|&"):
-            out.extend(_executing_tokens(token))
+        if " " in token:  # a quoted sub-shell string: "ls; rm x" after sh -c
+            inner = _executing_tokens(token)
+            if inner != [token]:
+                out.extend(inner)
     return out
 
 
@@ -158,10 +160,13 @@ def blocked_command_name(text: str) -> str:
     if not names:
         return ""
     for token in _executing_tokens(text):
-        base = os.path.basename(token.strip("\"'"))
-        for name in names:
-            if base == name or fnmatch.fnmatchcase(base, name):
-                return base
+        for part in re.split(r"[;|&()]+", token):  # "ls;rm x" is two commands in one token
+            base = os.path.basename(part.strip("\"'"))
+            if not base:
+                continue
+            for name in names:
+                if base == name or fnmatch.fnmatchcase(base, name):
+                    return base
     return ""
 
 

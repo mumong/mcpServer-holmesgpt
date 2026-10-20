@@ -179,6 +179,7 @@ class BlockedCommandNameTests(unittest.TestCase):
             "cd /tmp && rm a",
             'kubectl exec pod/x -- bash -c "dd if=/dev/zero of=/dev/sda"',
             "kubectl exec pod/x -- mkfs.ext4 /dev/sdb",
+            "kubectl exec pod/x -- sh -c 'cat /tmp/a;rm /tmp/a'",
         ):
             ok, err = bash_server.make_command_safe(command)
             self.assertFalse(ok, command)
@@ -191,6 +192,7 @@ class BlockedCommandNameTests(unittest.TestCase):
             "kubectl get pods -n aiops -o wide",
             "echo removed",
             "kubectl rollout restart deployment/api -n demo",
+            "kubectl exec pod/x -n demo -- sh -c 'ls /tmp/x; cat /tmp/y'",  # 7.0.51 recursed forever here
         ):
             self.assertEqual(bash_server.make_command_safe(command), (True, ""), command)
 
