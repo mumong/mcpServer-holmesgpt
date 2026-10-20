@@ -278,8 +278,9 @@ def _is_abnormal(row):
         if "waiting" in state:
             return True
         terminated = state.get("terminated")
-        if isinstance(terminated, dict) and (terminated.get("exitCode") or 0) != 0:
-            return True  # exit 0 is a finished init container or a completed task
+        if isinstance(terminated, dict):
+            # exit 0 is a finished init container or a completed task, however recent
+            return (terminated.get("exitCode") or 0) != 0
     return row.get("termination_within_window") is True
 
 

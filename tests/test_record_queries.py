@@ -1,6 +1,7 @@
 """Additive lifecycle API and generic record operations, including MCP JSON arguments."""
 
 import asyncio
+from datetime import datetime, timezone
 import copy
 import json
 import os
@@ -266,15 +267,17 @@ class StableClusterScanTests(unittest.TestCase):
         calico["spec"]["initContainers"] = [{"name": "install-cni"}]
         calico["status"]["initContainerStatuses"] = [
             {"name": "install-cni", "ready": True, "restartCount": 0,
-             "state": {"terminated": {"reason": "Completed", "exitCode": 0}}, "lastState": {}}
-        ]
+             "state": {"terminated": {"reason": "Completed", "exitCode": 0,
+                                      "finishedAt": datetime.now(timezone.utc).isoformat()}},
+             "lastState": {}}
+        ]  # finished a moment ago (termination_within_window) and still healthy
         job = _pod("batch", "backup-job", phase="Succeeded", ready=False,
                    state={"terminated": {"reason": "Completed", "exitCode": 0}})
         fixture = {"kind": "PodList", "metadata": {"resourceVersion": "v1"}, "items": [calico, job, *items]}
         page = self.call({"record_type": "container"}, fixture)
         names = [row["pod"] for row in page["rows"][:4]]
         self.assertEqual(names, ["pending", "crash", "notready", "deleting"])
-        self.assertNotIn("calico-node", names)
+        self.assertNotEqual(page["rows"][4]["pod"], "calico-node")
 
     def test_pod_rows_are_ordered_the_same_way(self):
         page = self.call({"record_type": "pod", "fields": ["namespace", "pod", "phase", "ready"]}, cluster_fixture())
