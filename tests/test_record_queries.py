@@ -258,6 +258,24 @@ class StableClusterScanTests(unittest.TestCase):
         self.assertIn("abnormal", " ".join(page["source_metadata"]["limitations"]).lower())
         self.assertEqual(page["row_order"], "abnormal_first")
 
+    def test_completed_init_containers_and_succeeded_pods_are_healthy(self):
+        # Live 7.0.48: calico-node's finished init containers (terminated, exit 0) sorted
+        # ahead of healthy rows and pushed real anomalies' neighbours off page one.
+        items = cluster_fixture()["items"]
+        calico = _pod("kube-system", "calico-node", ready=True)
+        calico["spec"]["initContainers"] = [{"name": "install-cni"}]
+        calico["status"]["initContainerStatuses"] = [
+            {"name": "install-cni", "ready": True, "restartCount": 0,
+             "state": {"terminated": {"reason": "Completed", "exitCode": 0}}, "lastState": {}}
+        ]
+        job = _pod("batch", "backup-job", phase="Succeeded", ready=False,
+                   state={"terminated": {"reason": "Completed", "exitCode": 0}})
+        fixture = {"kind": "PodList", "metadata": {"resourceVersion": "v1"}, "items": [calico, job, *items]}
+        page = self.call({"record_type": "container"}, fixture)
+        names = [row["pod"] for row in page["rows"][:4]]
+        self.assertEqual(names, ["pending", "crash", "notready", "deleting"])
+        self.assertNotIn("calico-node", names)
+
     def test_pod_rows_are_ordered_the_same_way(self):
         page = self.call({"record_type": "pod", "fields": ["namespace", "pod", "phase", "ready"]}, cluster_fixture())
         self.assertEqual([r["pod"] for r in page["rows"][:4]], ["pending", "crash", "notready", "deleting"])

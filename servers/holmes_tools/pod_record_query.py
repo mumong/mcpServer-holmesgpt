@@ -264,13 +264,22 @@ def _resolve_aliases(query, notes):
 
 def _is_abnormal(row):
     """True when the row shows a problem by Kubernetes facts, not by phase alone."""
-    if row.get("deletion_timestamp") or row.get("ready") is False:
+    phase = row.get("phase")
+    if row.get("deletion_timestamp"):
         return True
-    if row.get("phase") not in (None, "Running", "Succeeded"):
+    if phase == "Succeeded":
+        return False  # finished Jobs: not ready by design
+    if row.get("ready") is False and row.get("role") != "init":
+        return True
+    if phase not in (None, "Running"):
         return True
     state = row.get("state") or {}
-    if isinstance(state, dict) and ("waiting" in state or "terminated" in state):
-        return True
+    if isinstance(state, dict):
+        if "waiting" in state:
+            return True
+        terminated = state.get("terminated")
+        if isinstance(terminated, dict) and (terminated.get("exitCode") or 0) != 0:
+            return True  # exit 0 is a finished init container or a completed task
     return row.get("termination_within_window") is True
 
 
