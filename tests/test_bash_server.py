@@ -153,3 +153,60 @@ class BashServerTests(unittest.TestCase):
             timeout=60,
         )
         self.assertTrue(result["success"])
+
+
+class BlockedCommandNameTests(unittest.TestCase):
+    """BASH_BLOCKED_COMMANDS names are blocked wherever they would run: as the leading
+    command, after ``kubectl exec ... --``, inside ``sh -c "..."``, by full path, and in
+    kubectl_run_image's command list. Boss's test: "通过对话让它 rm 一个文件"."""
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.dict(bash_server.os.environ, {"BASH_BLOCKED_COMMANDS": "rm,dd,mkfs*"}))
+        self.run = self.stack.enter_context(patch.object(bash_server.subprocess, "run"))
+        self.run.return_value = Mock(returncode=0, stdout="", stderr="")
+        self.stack.enter_context(patch.object(bash_server.shutil, "which", return_value="/usr/bin/kubectl"))
+        self.stack.enter_context(patch.object(bash_server, "log_tool_call"))
+        self.stack.enter_context(patch.object(bash_server, "log_command"))
+
+    def test_blocked_names_are_caught_in_every_executing_position(self):
+        for command in (
+            "rm /tmp/claude-guard-test.txt",
+            "kubectl exec -n aiops pod/x -c app -- rm /tmp/claude-guard-test.txt",
+            "kubectl exec pod/x -- sh -c 'ls /tmp; rm -f /tmp/a'",
+            "/bin/rm -f /tmp/a",
+            "cd /tmp && rm a",
+            'kubectl exec pod/x -- bash -c "dd if=/dev/zero of=/dev/sda"',
+            "kubectl exec pod/x -- mkfs.ext4 /dev/sdb",
+        ):
+            ok, err = bash_server.make_command_safe(command)
+            self.assertFalse(ok, command)
+            self.assertIn("拒绝", err)
+
+    def test_ordinary_commands_still_pass(self):
+        for command in (
+            "ls -l /tmp",
+            "kubectl exec -n aiops pod/x -- cat /tmp/claude-guard-test.txt",
+            "kubectl get pods -n aiops -o wide",
+            "echo removed",
+            "kubectl rollout restart deployment/api -n demo",
+        ):
+            self.assertEqual(bash_server.make_command_safe(command), (True, ""), command)
+
+    def test_run_image_command_list_is_checked_before_any_kubectl_call(self):
+        result = asyncio.run(
+            bash_server.call_tool(
+                "kubectl_run_image",
+                {
+                    "namespace": "demo",
+                    "pod_name": "probe",
+                    "image": "busybox:1",
+                    "command": ["sh", "-c", "rm -rf /data"],
+                },
+            )
+        )
+        payload = json.loads(result[0].text)
+        self.assertFalse(payload["success"])
+        self.assertIn("rm", payload["error"])
+        self.run.assert_not_called()

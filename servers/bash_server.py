@@ -15,10 +15,12 @@ Bash / Kubectl MCP Server
 """
 
 import asyncio
+import fnmatch
 import functools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -132,6 +134,37 @@ NAMESPACE_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 IMAGE_RE = re.compile(r"^[\w./\-:]+$")
 
 
+def _executing_tokens(text: str) -> list:
+    """Every token that could be run as a program, including inside quoted sub-shells.
+
+    ``kubectl exec pod -- rm x`` and ``sh -c "ls; rm x"`` execute ``rm`` just as a
+    leading ``rm`` does, so a blocked name is matched by token, not by line position.
+    """
+    try:
+        tokens = shlex.split(text, posix=True)
+    except ValueError:
+        tokens = text.split()
+    out = []
+    for token in tokens:
+        out.append(token)
+        if any(ch in token for ch in " ;|&"):
+            out.extend(_executing_tokens(token))
+    return out
+
+
+def blocked_command_name(text: str) -> str:
+    """The first BASH_BLOCKED_COMMANDS name that would execute in ``text``, else ''."""
+    names = _get_simple_blocked_commands()
+    if not names:
+        return ""
+    for token in _executing_tokens(text):
+        base = os.path.basename(token.strip("\"'"))
+        for name in names:
+            if base == name or fnmatch.fnmatchcase(base, name):
+                return base
+    return ""
+
+
 def make_command_safe(command_str: str) -> Tuple[bool, str]:
     """
     简单安全校验。通过返回 (True, "")，不通过返回 (False, "原因")。
@@ -146,6 +179,9 @@ def make_command_safe(command_str: str) -> Tuple[bool, str]:
     for pat in patterns:
         if re.search(pat, cmd, re.IGNORECASE):
             return False, "命令包含不允许的模式，拒绝执行"
+    blocked = blocked_command_name(cmd)
+    if blocked:
+        return False, f"命令包含被禁止的命令 {blocked}，拒绝执行"
     return True, ""
 
 
@@ -210,6 +246,9 @@ def validate_image_and_commands(image: str, command_list: list) -> Tuple[bool, s
     for c in command_list or []:
         if not isinstance(c, str):
             return False, "命令列表中的元素必须为字符串"
+    blocked = blocked_command_name(" ".join(shlex.quote(c) for c in command_list or []))
+    if blocked:
+        return False, f"命令包含被禁止的命令 {blocked}，拒绝执行"
     return True, ""
 
 
