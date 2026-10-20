@@ -41,6 +41,39 @@ class DeletionFactsTests(unittest.TestCase):
         self.assertIn("finalizers", pod_record_query.NON_SCALAR_FIELDS)
         self.assertIn("terminating_seconds", pod_record_query.POD_FIELDS)
 
+    def _records(self, arguments, pod):
+        prepared = pod_record_query.prepare(arguments)
+        payload = {"status": "success", "coverage": "present",
+                   "pods": [pod_lifecycle.project_pod(pod, OBSERVED, 30)]}
+        return pod_record_query.project(payload, prepared, arguments)
+
+    def test_deletion_facts_stay_when_the_caller_picks_other_fields(self):
+        # Live run f8e56239b1b74313: fields=[state, last_exit_code, ...] hid the deletion,
+        # the model saw only exit 137 and argued OOM / application exit.
+        pod = _pod()
+        pod["status"]["containerStatuses"][0]["state"]["terminated"]["finishedAt"] = "2026-10-16T11:10:29Z"
+        out = self._records({"namespace": "aiops-case-11", "pod": "workload", "record_type": "container",
+                             "fields": ["container", "state", "last_exit_code"]}, pod)
+        row = out["rows"][0]
+        self.assertEqual(row["deletion_timestamp"], "2026-10-16T11:10:19Z")
+        self.assertEqual(row["finalizers"], ["aiops.lab/hold"])
+        self.assertEqual(row["terminating_seconds"], 19 * 60)
+        self.assertIs(row["stopped_by_pod_deletion"], True)
+        pod_rows = self._records({"record_type": "pod", "fields": ["namespace", "pod", "phase"]}, _pod())
+        self.assertEqual(pod_rows["rows"][0]["finalizers"], ["aiops.lab/hold"])
+
+    def test_termination_before_the_deletion_is_not_attributed_to_it(self):
+        pod = _pod()
+        pod["status"]["containerStatuses"][0]["state"]["terminated"]["finishedAt"] = "2026-10-16T11:05:00Z"
+        out = self._records({"namespace": "aiops-case-11", "pod": "workload", "record_type": "container",
+                             "fields": ["container", "state"]}, pod)
+        self.assertIs(out["rows"][0]["stopped_by_pod_deletion"], False)
+
+    def test_live_pods_do_not_grow_sticky_columns(self):
+        out = self._records({"record_type": "container", "fields": ["container", "state"]}, _pod(deleting=False))
+        self.assertNotIn("deletion_timestamp", out["columns"])
+        self.assertNotIn("stopped_by_pod_deletion", out["rows"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

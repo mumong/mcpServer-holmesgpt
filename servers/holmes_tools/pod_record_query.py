@@ -1,6 +1,7 @@
 """Lifecycle fact adapter for optional, bounded record operations."""
 
 import os
+from datetime import datetime
 
 from .record_query import CONTRACT_VERSION, QUERY_KEYS, select_records, validate_query
 
@@ -35,6 +36,7 @@ CONTAINER_FIELDS = POD_FIELDS + [
     "termination_within_window",
     "resources",
     "current_state",
+    "stopped_by_pod_deletion",
 ]
 CONTAINER_ONLY_FIELDS = [f for f in CONTAINER_FIELDS if f not in POD_FIELDS]
 NON_SCALAR_FIELDS = {"conditions", "condition_states", "state", "current_state", "last_state", "resources", "finalizers"}
@@ -60,6 +62,12 @@ DEFAULT_FIELDS = {
         "termination_within_window",
     ],
 }
+# A Pod being deleted changes what every other field means (a 137 after the deletion is
+# the kubelet stopping it, not an OOM), so these ride along on its rows whatever the
+# caller selected. Live run f8e56239b1b74313 picked fields without them and misread
+# a finalizer-blocked Pod as an application exit.
+DELETION_FIELDS = ["deletion_timestamp", "terminating_seconds", "finalizers"]
+CONTAINER_DELETION_FIELDS = DELETION_FIELDS + ["stopped_by_pod_deletion"]
 SOURCE_KEYS = (
     "contract_version",
     "status",
@@ -85,7 +93,9 @@ DESCRIPTION = (
     " Optional record_type (pod|container) returns chosen fields instead of the full snapshot: pod rows = "
     "Pod identity/phase/conditions; container rows add readiness, restarts, termination (incl. init/ephemeral). "
     "where filters the SAME row (match all|any); group_by returns exact counts over this page only. "
-    "Missing values stay null (unknown). Example count: record_type=pod, group_by=node."
+    "Missing values stay null (unknown). Rows of a Pod being deleted always carry deletion_timestamp, "
+    "terminating_seconds, finalizers and (container rows) stopped_by_pod_deletion = the container ended "
+    "after the deletion was requested. Example count: record_type=pod, group_by=node."
 )
 PROPERTIES = {
     "record_type": {
@@ -180,9 +190,25 @@ def _lenient(kind, query):
     return kind, query, notes
 
 
+def _parse_time(value):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+
+
+def _stopped_by_deletion(container, deleted_at):
+    """True when the container's latest termination came after the Pod deletion request."""
+    finished = _parse_time(container.get("latest_observed_termination_at"))
+    if deleted_at is None or finished is None:
+        return None
+    return finished >= deleted_at
+
+
 def lifecycle_rows(payload, kind):
     rows = []
     for pod in payload["pods"]:
+        deleted_at = _parse_time(pod.get("deletion_timestamp"))
         parent = {f: pod.get("name" if f == "pod" else f) for f in POD_FIELDS}
         conditions = pod.get("conditions") or []
         ready = next((c.get("status") for c in conditions if c.get("type") == "Ready"), None)
@@ -208,9 +234,29 @@ def lifecycle_rows(payload, kind):
                     last_termination_reason=previous.get("reason"),
                     last_exit_code=previous.get("exitCode"),
                     last_finished_at=previous.get("finishedAt"),
+                    stopped_by_pod_deletion=_stopped_by_deletion(container, deleted_at),
                 )
                 rows.append(row)
     return rows
+
+
+def _keep_deletion_facts(selected, rows, kind):
+    """Add the deletion facts to the selected rows of Pods that are being deleted."""
+    if selected.get("result_type") != "records":
+        return
+    sticky = CONTAINER_DELETION_FIELDS if kind == "container" else DELETION_FIELDS
+    identity = ("namespace", "pod", "container") if kind == "container" else ("namespace", "pod")
+    deleting = {
+        tuple(row.get(f) for f in identity): row for row in rows if row.get("deletion_timestamp")
+    }
+    added = False
+    for row in selected["rows"]:
+        source = deleting.get(tuple(row.get(f) for f in identity))
+        if source is not None:
+            row.update({f: source.get(f) for f in sticky})
+            added = True
+    if added:
+        selected["columns"] = list(dict.fromkeys([*selected["columns"], *sticky]))
 
 
 def error_result(message, arguments, source=None):
@@ -229,11 +275,13 @@ def project(payload, prepared, arguments):
     try:
         if payload.get("status") != "success":
             return error_result(payload.get("error", "source_not_successful"), arguments, payload)
+        rows = lifecycle_rows(payload, kind)
         selected = select_records(
-            lifecycle_rows(payload, kind),
+            rows,
             query,
             ["namespace", "pod", "uid"] + (["container", "role"] if kind == "container" else []),
         )
+        _keep_deletion_facts(selected, rows, kind)
         packet = {
             "contract_version": CONTRACT_VERSION,
             "status": "success",
