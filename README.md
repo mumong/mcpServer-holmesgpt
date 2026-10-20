@@ -1,5 +1,7 @@
 # MCP Server Manager
 
+[English](README.en.md) | **中文**
+
 本项目负责把多个 stdio MCP Server 统一拉起，并通过 `mcp-proxy` 暴露成 HTTP SSE 端点，供 HolmesGPT / AIOps 等服务通过 `mcp_servers` 接入。
 
 核心链路：
