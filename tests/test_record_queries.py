@@ -1,12 +1,12 @@
 """Additive lifecycle API and generic record operations, including MCP JSON arguments."""
 
 import asyncio
-from datetime import datetime, timezone
 import copy
 import json
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -277,7 +277,8 @@ class StableClusterScanTests(unittest.TestCase):
         page = self.call({"record_type": "container"}, fixture)
         names = [row["pod"] for row in page["rows"][:4]]
         self.assertEqual(names, ["pending", "crash", "notready", "deleting"])
-        self.assertNotEqual(page["rows"][4]["pod"], "calico-node")
+        self.assertNotIn("calico-node", names)
+        self.assertNotIn("backup-job", names)
 
     def test_pod_rows_are_ordered_the_same_way(self):
         page = self.call({"record_type": "pod", "fields": ["namespace", "pod", "phase", "ready"]}, cluster_fixture())
