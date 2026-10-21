@@ -153,3 +153,28 @@ help:
 	@echo ""
 	@echo "  当前版本: $(DOCKER_TAG)"
 	@echo "  镜像地址: $(DOCKER_NAME):$(DOCKER_TAG)"
+
+# ============================================================
+# 多集群测试环境（specs/008-multi-cluster）
+# 运维 kubeconfig 只在本机；运行时不依赖它。隧道证书和签名密钥由
+# robusta 的 `make sync-xnet-cert` 下发到 mcp 命名空间。
+# ============================================================
+MC_KUBE_DIR ?= $(HOME)/.kube/aiops-mc
+CENTER_KUBECONFIG ?= $(MC_KUBE_DIR)/center
+MC_CLUSTERS_FILE ?= ../robusta/deploy-edge/clusters.mc.yaml
+MC_LOAD_HOSTS ?=
+.PHONY: deploy-mc sync-aiops-edge
+
+sync-aiops-edge:
+	./scripts/sync_aiops_edge.sh
+
+deploy-mc:
+	@if test -n "$(MC_LOAD_HOSTS)"; then ../robusta/deploy-edge/load_image.sh $(DOCKER_NAME):$(DOCKER_TAG) $(MC_LOAD_HOSTS); fi
+	kubectl --kubeconfig $(CENTER_KUBECONFIG) create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl --kubeconfig $(CENTER_KUBECONFIG) apply -f -
+	kubectl --kubeconfig $(CENTER_KUBECONFIG) -n $(NAMESPACE) create configmap aiops-clusters \
+		--from-file=clusters.yaml=$(MC_CLUSTERS_FILE) --dry-run=client -o yaml | kubectl --kubeconfig $(CENTER_KUBECONFIG) apply -f -
+	kubectl kustomize --load-restrictor=LoadRestrictionsNone deploy/envs/mc \
+		| sed 's|image: $(IMAGE_REPOSITORY)/$(PROJECT)/$(IMAGE_NAME):.*|image: $(DOCKER_NAME):$(DOCKER_TAG)|' \
+		| kubectl --kubeconfig $(CENTER_KUBECONFIG) apply -f -
+	kubectl --kubeconfig $(CENTER_KUBECONFIG) -n $(NAMESPACE) rollout restart deployment/mcp-server-manager
+	kubectl --kubeconfig $(CENTER_KUBECONFIG) -n $(NAMESPACE) rollout status deployment/mcp-server-manager --timeout=300s

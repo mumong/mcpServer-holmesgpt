@@ -1,0 +1,31 @@
+# Three-cluster test env (specs/008-multi-cluster). Rendered by `make deploy-mc`.
+# Differences from the single-cluster deploy/: no node pinning or hostPath, the
+# multi-cluster config and tunnel credentials are mounted, only the servers AIOps
+# uses are enabled, and nothing is created in namespaces we do not own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../namespace.yaml
+  - ../../rbac.yaml
+  - ../../service.yaml
+  - ../../deployment.yaml
+  - configmap.yaml
+patches:
+  - path: deployment-patch.yaml
+  - target: {kind: Deployment, name: mcp-server-manager}
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+  # The legacy stack's exec Role lives in "monitor"; the victoria stack needs no exec.
+  - target: {kind: Role, name: mcp-server-manager-observability-exec}
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata: {name: mcp-server-manager-observability-exec, namespace: monitor}
+  - target: {kind: RoleBinding, name: mcp-server-manager-observability-exec}
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata: {name: mcp-server-manager-observability-exec, namespace: monitor}

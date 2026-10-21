@@ -28,8 +28,8 @@ RUN npm_config_fetch_timeout=30000 npm_config_fetch_retries=1 npm install -g mcp
 # 安装 kubectl（K8s core MCP 工具依赖）
 RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
     && chmod +x kubectl \
-    && mv kubectl /usr/local/bin/ \
-    && kubectl version --client
+    && mv kubectl /usr/local/bin/kubectl.real \
+    && kubectl.real version --client
 
 # 安装 Helm 并预配置常用仓库
 RUN curl -fsSL https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz | tar -xzf - \
@@ -57,6 +57,8 @@ ENV VERSION=${VERSION}
 COPY start.py launch_config.py ./
 COPY mcp_client.py .
 COPY servers/ ./servers/
+# kubectl shim (specs/008-multi-cluster): runs kubectl.real unless AIOPS_CLUSTER names an edge cluster.
+COPY bin/kubectl /usr/local/bin/kubectl
 
 # 配置文件通过 ConfigMap 挂载到 /app/config/mcp_config.yaml
 ENV MCP_CONFIG_PATH=/app/config/mcp_config.yaml
