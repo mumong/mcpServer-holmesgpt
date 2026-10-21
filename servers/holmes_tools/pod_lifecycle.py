@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
+import cluster_scope
 from mcp.types import Tool
 
 from . import pod_record_query
@@ -22,7 +23,8 @@ def _kubectl_config():
     """Raw kubectl requests need explicit in-cluster config; retain external contexts."""
     host = os.environ.get("KUBERNETES_SERVICE_HOST")
     if (
-        os.environ.get("KUBECONFIG")
+        cluster_scope.is_remote()  # the shim forwards; identity flags are refused remotely
+        or os.environ.get("KUBECONFIG")
         or (Path.home() / ".kube/config").is_file()
         or not host
         or not (SERVICE_ACCOUNT / "token").is_file()
@@ -216,6 +218,7 @@ def query(arguments):
                 text=True,
                 timeout=30,
                 check=False,
+                env=cluster_scope.subprocess_env(),
             )
         if response.returncode:
             if prepared:

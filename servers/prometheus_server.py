@@ -11,6 +11,7 @@ Prometheus MCP Server
 
 import asyncio
 
+import cluster_scope
 from holmes_tools import prometheus
 from holmes_tools.mcp_logger import get_logger, log_tool_call, log_tool_result
 from holmes_tools.server_adapter import call_text_tool_in_thread
@@ -24,7 +25,7 @@ server = Server("prometheus-mcp-server")
 
 @server.list_tools()
 async def list_tools():
-    return prometheus.TOOLS
+    return cluster_scope.with_cluster_param(prometheus.TOOLS)
 
 
 @server.call_tool()

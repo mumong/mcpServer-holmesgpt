@@ -8,8 +8,10 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
+import cluster_scope
+
 from .. import _http
-from ..collectors import _kube
+from ..collectors import _kube, victorialogs_events
 from ..collectors.elasticsearch import es_credentials
 from ..config import get_config
 from .common import (
@@ -415,6 +417,8 @@ def _records_directness(records: list[dict[str, Any]]) -> str:
 
 
 def execute(arguments: dict[str, Any]) -> dict[str, Any]:
+    if cluster_scope.backend("logs") == "victorialogs_events":
+        return _execute_events(arguments)
     namespace = str(arguments.get("namespace") or "").strip()
     pod = str(arguments.get("pod") or "").strip()
     purpose = str(arguments.get("purpose") or "").strip()
@@ -794,3 +798,104 @@ def _entity_lifecycle_changed(
     return any(
         str(before.get(key) or "") != str(after.get(key) or "") for key in ("pod_uid", "creation_timestamp")
     )
+
+
+EVENTS_LIMITATION = (
+    "该集群未采集容器日志，这里返回的是该 Pod 的 K8s 事件；需要容器日志请使用 kubectl_logs "
+    "(no container logs are collected for this cluster; these are the Pod's Kubernetes events)"
+)
+
+
+def _execute_events(arguments: dict[str, Any]) -> dict[str, Any]:
+    """victoria profile: the Pod's Kubernetes events stand in for logs, labelled as such."""
+    namespace = str(arguments.get("namespace") or "").strip()
+    pod = str(arguments.get("pod") or "").strip()
+    purpose = str(arguments.get("purpose") or "").strip()
+
+    def fail(code: str, message: str, **extra: Any) -> dict[str, Any]:
+        return {**_error(namespace, pod, purpose, code, message, **extra), "source_system": "victorialogs"}
+
+    if not namespace or not pod or not purpose:
+        return fail("invalid_arguments", "namespace, pod and purpose are required")
+    max_records = min(MAX_RECORDS, max(1, int(arguments.get("max_records") or 20)))
+    entity, entity_error = resolve_pod_scope(namespace, pod, arguments.get("pod_uid"))
+    if entity_error:
+        return fail(entity_error["code"], entity_error["message"])
+    assert entity is not None
+    window, window_error = bounded_window(arguments, not_before=entity.get("creation_timestamp"))
+    if window_error:
+        return fail(window_error["code"], window_error["message"], entity=entity)
+    assert window is not None
+    source = cluster_scope.source("logs")
+    cluster = cluster_scope.current()
+    events, meta, error = victorialogs_events.query_pod_events(
+        base_url=str(source.get("url") or ""),
+        cluster_field=str(source.get("cluster_field") or "cluster"),
+        cluster=cluster.name if cluster else "",
+        namespace=namespace,
+        pod=pod,
+        start=window["start"],
+        end=window["end"],
+        limit=max_records,
+        timeout=get_config().timeout_seconds,
+    )
+    if error:
+        return fail("victorialogs_error", error, entity=entity, query=meta)
+    samples = []
+    facts = []
+    for event in events:
+        sample = {
+            "timestamp": event["timestamp"],
+            "type": event["type"],
+            "reason": event["reason"],
+            "message": event["message"],
+            "count": event["count"],
+            "involved_kind": event["involved_kind"],
+            "involved_name": event["involved_name"],
+            "directness": "direct",
+        }
+        ref = evidence_ref("event", namespace, pod, sample)
+        sample["ref"] = ref
+        samples.append(sample)
+        facts.append(
+            {
+                "ref": ref,
+                "source_system": "victorialogs",
+                "dimension": "logging",
+                "entity": f"{namespace}/{pod}",
+                "pod_uid": entity.get("pod_uid"),
+                "observed_at": event["timestamp"],
+                "name": "k8s.event",
+                "value": f"{event['type']} {event['reason']}: {event['message']}",
+                "value_truncated": False,
+                "level": "warning" if event["type"] == "Warning" else "normal",
+                "fields": {"count": event["count"], "reason": event["reason"], "type": event["type"]},
+                "directness": "direct",
+            }
+        )
+    truncated = meta.get("matched", 0) > len(samples)
+    return {
+        "ok": True,
+        "status": "query_succeeded",
+        "source_system": "victorialogs",
+        "dimension": "logging",
+        "log_source": "k8s_events",
+        "entity": entity,
+        "purpose": purpose,
+        "coverage": "partial",
+        "directness": "direct" if samples else "none",
+        "query": meta,
+        "facts": facts,
+        "samples": samples,
+        "evidence_refs": [fact["ref"] for fact in facts],
+        "counts": {
+            "matched": meta.get("matched", 0),
+            "retrieved": meta.get("backend_lines", 0),
+            "returned": len(samples),
+            "dropped": max(0, meta.get("matched", 0) - len(samples)),
+        },
+        "truncation": {"truncated": truncated, "stages": []},
+        "truncated": truncated,
+        "limitations": [EVENTS_LIMITATION],
+        "limits": {"max_records": MAX_RECORDS, "requested_max_records": max_records},
+    }

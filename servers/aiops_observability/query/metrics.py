@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
+import cluster_scope
+
 from .. import _http
 from ..config import get_config
 from .common import (
@@ -555,14 +557,19 @@ def _request_prometheus(
     params: dict[str, Any],
 ) -> tuple[dict[str, Any], int | None]:
     cfg = get_config()
-    if not cfg.prometheus_url:
+    # victoria clusters: the profile's endpoint, and extra_label pins every selector
+    # to the cluster (spec FR-010); legacy keeps PROMETHEUS_URL.
+    base = (
+        cluster_scope.prometheus_url()
+        if cluster_scope.backend("metrics") == "victoriametrics"
+        else cfg.prometheus_url
+    )
+    if not base:
         return {"status": "error", "error": "PROMETHEUS_URL is not configured"}, None
     if requests is None:
         return {"status": "error", "error": "requests is not installed"}, None
-    endpoint = urljoin(
-        cfg.prometheus_url if cfg.prometheus_url.endswith("/") else cfg.prometheus_url + "/",
-        path,
-    )
+    endpoint = urljoin(base if base.endswith("/") else base + "/", path)
+    params = {**params, **cluster_scope.prometheus_params()}
     try:
         response = _http.SESSION.get(endpoint, params=params, timeout=cfg.timeout_seconds)
         status_code = response.status_code

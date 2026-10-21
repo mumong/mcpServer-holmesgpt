@@ -6,6 +6,7 @@ import json
 import subprocess
 from typing import Any
 
+import cluster_scope
 import yaml
 
 from ..schemas import EvidenceItem, SourceResult, evidence_id
@@ -19,6 +20,7 @@ def _run_kubectl(args: list[str], timeout: int = 30) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=cluster_scope.subprocess_env(),
         )
     except Exception as exc:
         return False, str(exc)

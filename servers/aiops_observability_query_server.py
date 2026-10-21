@@ -13,6 +13,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+import cluster_scope
 from holmes_tools import aiops_observability_query
 from holmes_tools.mcp_logger import get_logger, log_tool_call, log_tool_result
 from mcp.server import Server
@@ -57,7 +58,7 @@ def _log_result_contract(name: str, result: str) -> None:
 
 @server.list_tools()
 async def list_tools():
-    return aiops_observability_query.TOOLS
+    return cluster_scope.with_cluster_param(aiops_observability_query.TOOLS)
 
 
 @server.call_tool()

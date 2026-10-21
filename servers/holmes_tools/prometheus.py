@@ -13,6 +13,7 @@ from http.cookiejar import DefaultCookiePolicy
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
+import cluster_scope
 from mcp.types import Tool
 
 try:
@@ -83,7 +84,10 @@ def _prometheus_http_error_payload(
 
 
 def _get_prometheus_url() -> str:
-    u = os.environ.get("PROMETHEUS_URL", "http://localhost:9090/").strip()
+    if cluster_scope.backend("metrics") == "victoriametrics":
+        u = cluster_scope.prometheus_url()
+    else:
+        u = os.environ.get("PROMETHEUS_URL", "http://localhost:9090/").strip()
     return u if u.endswith("/") else u + "/"
 
 
@@ -97,7 +101,8 @@ def _do_get(path: str, params: Optional[Dict] = None) -> str:
     url = urljoin(_get_prometheus_url(), path)
     t0 = time.monotonic()
     try:
-        r = _SESSION.get(url, params=params or {}, timeout=_get_timeout())
+        params = {**(params or {}), **cluster_scope.prometheus_params()}
+        r = _SESSION.get(url, params=params, timeout=_get_timeout())
         elapsed = time.monotonic() - t0
         log_http_request(
             "GET",
@@ -141,7 +146,8 @@ def _do_post(path: str, data: Optional[Dict] = None) -> str:
     t0 = time.monotonic()
     try:
         # ⚠️ 关键修复：使用 data= 而非 json=，Prometheus API 要求 form-encoded POST
-        r = _SESSION.post(url, data=data or {}, timeout=_get_timeout())
+        data = {**(data or {}), **cluster_scope.prometheus_params()}
+        r = _SESSION.post(url, data=data, timeout=_get_timeout())
         elapsed = time.monotonic() - t0
         log_http_request(
             "POST", url, params_or_data=data, status_code=r.status_code, response_text=r.text, elapsed=elapsed

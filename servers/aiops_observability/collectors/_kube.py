@@ -13,6 +13,8 @@ import base64
 import subprocess
 from typing import Optional
 
+import cluster_scope
+
 
 def run_kubectl(
     args: list[str],
@@ -28,6 +30,7 @@ def run_kubectl(
             capture_output=True,
             text=True,
             input=input_text,
+            env=cluster_scope.subprocess_env(),
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 - collectors must degrade gracefully

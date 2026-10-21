@@ -27,6 +27,7 @@ import time
 from typing import Tuple
 
 import anyio.to_thread
+import cluster_scope
 from holmes_tools.arg_utils import clamp_timeout
 from holmes_tools.mcp_logger import log_command, log_tool_call
 from mcp.server import Server
@@ -190,17 +191,19 @@ def make_command_safe(command_str: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def execute_bash_command(cmd: str, timeout: int = 60) -> dict:
+def execute_bash_command(cmd: str, timeout: int = 60, env: dict | None = None) -> dict:
     """执行 bash 命令，返回 { "success", "stdout", "stderr", "returncode" }"""
-    return _execute_command(cmd, timeout=timeout, shell=True)
+    return _execute_command(cmd, timeout=timeout, shell=True, env=env)
 
 
-def _execute_command(cmd: str | list[str], timeout: int, *, shell: bool) -> dict:
+def _execute_command(cmd: str | list[str], timeout: int, *, shell: bool, env: dict | None = None) -> dict:
     """共享结果和日志合同；kubectl argv 不经宿主 shell 解释。"""
     log_cmd = cmd if isinstance(cmd, str) else " ".join(cmd)
     execution_options = {"shell": shell}
     if shell:
         execution_options["executable"] = "/bin/bash"
+    if env is not None:  # remote cluster: AIOPS_CLUSTER for the kubectl shim
+        execution_options["env"] = env
     t0 = time.monotonic()
     try:
         result = subprocess.run(
@@ -272,65 +275,75 @@ def _rejected(error: str) -> list:
 @server.list_tools()
 async def list_tools():
     """定义 Bash / Kubectl 工具"""
-    return [
-        Tool(
-            name="run_bash_command",
-            description="在受控环境下执行一条 bash 命令。会做安全校验，危险命令会被拒绝。适用于执行只读或低风险命令（如 cat、grep、ls、date）。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "要执行的单条 bash 命令",
+    return cluster_scope.with_cluster_param(
+        [
+            Tool(
+                name="run_bash_command",
+                description="在受控环境下执行一条 bash 命令。会做安全校验，危险命令会被拒绝。适用于执行只读或低风险命令（如 cat、grep、ls、date）。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "要执行的单条 bash 命令",
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": "超时秒数，默认 60",
+                            "default": 60,
+                        },
                     },
-                    "timeout_seconds": {
-                        "type": "integer",
-                        "description": "超时秒数，默认 60",
-                        "default": 60,
-                    },
+                    "required": ["command"],
                 },
-                "required": ["command"],
-            },
-        ),
-        Tool(
-            name="kubectl_run_image",
-            description="在指定 Kubernetes 命名空间中，使用给定镜像创建临时 Pod 并执行命令，执行完后自动删除（--rm --attach）。适用于跑一次性任务或调试镜像。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "namespace": {
-                        "type": "string",
-                        "description": "目标命名空间",
+            ),
+            Tool(
+                name="kubectl_run_image",
+                description="在指定 Kubernetes 命名空间中，使用给定镜像创建临时 Pod 并执行命令，执行完后自动删除（--rm --attach）。适用于跑一次性任务或调试镜像。",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "namespace": {
+                            "type": "string",
+                            "description": "目标命名空间",
+                        },
+                        "pod_name": {
+                            "type": "string",
+                            "description": "Pod 名称（需符合 K8s 命名规范）",
+                        },
+                        "image": {
+                            "type": "string",
+                            "description": "容器镜像，如 nginx:alpine 或 myreg.io/myimg:v1",
+                        },
+                        "command": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": '要执行的命令列表，如 ["sh", "-c", "echo hello"]；不填则用镜像默认 entrypoint',
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": "超时秒数，默认 120",
+                            "default": 120,
+                        },
                     },
-                    "pod_name": {
-                        "type": "string",
-                        "description": "Pod 名称（需符合 K8s 命名规范）",
-                    },
-                    "image": {
-                        "type": "string",
-                        "description": "容器镜像，如 nginx:alpine 或 myreg.io/myimg:v1",
-                    },
-                    "command": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": '要执行的命令列表，如 ["sh", "-c", "echo hello"]；不填则用镜像默认 entrypoint',
-                    },
-                    "timeout_seconds": {
-                        "type": "integer",
-                        "description": "超时秒数，默认 120",
-                        "default": 120,
-                    },
+                    "required": ["namespace", "pod_name", "image"],
                 },
-                "required": ["namespace", "pod_name", "image"],
-            },
-        ),
-    ]
+            ),
+        ]
+    )
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """处理工具调用"""
     log_tool_call(_SERVER, name, arguments)
+    arguments = dict(arguments or {})
+    # The scope is resolved here; the worker thread gets the explicit env (anyio does not copy contexts).
+    with cluster_scope.activate(arguments) as scope:
+        if scope.error:
+            return _rejected(cluster_scope.error_text(scope))
+        remote = cluster_scope.is_remote()
+        env = cluster_scope.subprocess_env()
+        cluster_name = scope.cluster.name if scope.cluster else ""
 
     if name == "run_bash_command":
         command = arguments.get("command", "").strip()
@@ -338,7 +351,11 @@ async def call_tool(name: str, arguments: dict):
         ok, err = make_command_safe(command)
         if not ok:
             return _rejected(err)
-        out = await anyio.to_thread.run_sync(execute_bash_command, command, timeout)
+        if remote:
+            remote_error = cluster_scope.remote_shell_error(command)
+            if remote_error:
+                return _rejected(f"{remote_error} (cluster {cluster_name})")
+        out = await anyio.to_thread.run_sync(execute_bash_command, command, timeout, env)
         return _json_text(out)
 
     if name == "kubectl_run_image":
@@ -348,6 +365,11 @@ async def call_tool(name: str, arguments: dict):
         command_list = arguments.get("command") or []
         timeout = clamp_timeout(int(arguments.get("timeout_seconds") or 120))
 
+        if remote:
+            return _rejected(
+                f"aiops: capability_missing: kubectl_run_image needs an attached session, which the edge "
+                f"runner does not support (cluster {cluster_name}); use kubectl exec in an existing Pod"
+            )
         if not namespace or not NAMESPACE_RE.match(namespace):
             return _rejected("namespace 不合法或为空")
         if not pod_name or not NAMESPACE_RE.match(pod_name):

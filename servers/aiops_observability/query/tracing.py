@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+import cluster_scope
+
 from .. import _http
 from ..collectors import _kube
 from ..collectors.tempo import collect_tempo
@@ -458,6 +460,15 @@ def execute(arguments: dict[str, Any]) -> dict[str, Any]:
     namespace = str(arguments.get("namespace") or "").strip()
     pod = str(arguments.get("pod") or "").strip()
     purpose = str(arguments.get("purpose") or "").strip()
+    if cluster_scope.backend("traces") == "none":
+        cluster = cluster_scope.current()
+        return _error(
+            namespace,
+            pod,
+            purpose,
+            "capability_missing",
+            f"该集群未提供链路数据 (cluster {cluster.name if cluster else ''} has no tracing backend)",
+        )
     if not namespace or not pod or not purpose:
         return _error(
             namespace,

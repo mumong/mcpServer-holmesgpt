@@ -14,6 +14,8 @@ try:
 except ImportError:
     Template = None
 
+import cluster_scope
+
 from .mcp_logger import get_logger
 
 logger = get_logger("command")
@@ -70,6 +72,7 @@ def run_command(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=cluster_scope.subprocess_env(),
         )
         elapsed = time.monotonic() - t0
         stdout = result.stdout or ""
@@ -125,6 +128,7 @@ def run_script(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=cluster_scope.subprocess_env(),
         )
         elapsed = time.monotonic() - t0
         stdout = result.stdout or ""

@@ -33,8 +33,11 @@ class ShimWrapperTest(unittest.TestCase):
             calls.append((path, args))
             raise SystemExit(0)
 
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch("os.execv", fake_execv), \
-                mock.patch("sys.argv", ["kubectl", "get", "ns"]):
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch("os.execv", fake_execv),
+            mock.patch("sys.argv", ["kubectl", "get", "ns"]),
+        ):
             with self.assertRaises(SystemExit):
                 runpy.run_path(str(ROOT / "bin" / "kubectl"))
         self.assertEqual(calls, [("/opt/kubectl.real", ["/opt/kubectl.real", "get", "ns"])])

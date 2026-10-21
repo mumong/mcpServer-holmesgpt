@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+import cluster_scope
 from mcp.types import Tool
 
 from servers.aiops_observability.query import logs, metrics, topology, tracing
@@ -261,11 +262,30 @@ _TOOL_RESULT_SCOPE = {
 }
 
 
+_DIMENSION = {
+    "execute_pod_promql": "metrics",
+    "query_pod_logs": "logs",
+    "query_pod_tracing": "traces",
+    "query_pod_topology": "kubernetes",
+}
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> str | None:
     handler = _HANDLERS.get(name)
     if not handler:
         return None
-    safe_arguments = arguments or {}
+    safe_arguments = dict(arguments or {})
+    with cluster_scope.activate(safe_arguments) as scope:
+        if scope.error:
+            return tool_error_result(
+                name, safe_arguments, code=scope.error["code"], message=scope.error["message"]
+            )
+        return _call_in_scope(name, handler, safe_arguments)
+
+
+def _call_in_scope(
+    name: str, handler: Callable[[dict[str, Any]], dict[str, Any]], safe_arguments: dict[str, Any]
+) -> str:
     if input_exceeds_budget(safe_arguments):
         source_system, dimension = _TOOL_RESULT_SCOPE[name]
         return dump_bounded_result(
@@ -280,7 +300,7 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str | None:
                 query=query_descriptor(safe_arguments, executed=False),
             )
         )
-    return dump_bounded_result(handler(safe_arguments))
+    return dump_bounded_result(cluster_scope.annotate(handler(safe_arguments), _DIMENSION[name]))
 
 
 def tool_error_result(

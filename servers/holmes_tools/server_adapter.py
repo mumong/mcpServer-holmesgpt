@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 import anyio.to_thread
+import cluster_scope
 from mcp.types import TextContent
 
 from .arg_utils import sanitize_arguments_for_tools
@@ -33,6 +34,16 @@ def call_text_tool(
     """
     log_call(server_name, name, arguments)
     started = time.monotonic()
+    arguments = dict(arguments or {})
+    with cluster_scope.activate(arguments) as scope:
+        if scope.error:
+            return [TextContent(type="text", text=cluster_scope.error_text(scope))]
+        return _call_in_scope(
+            server_name, name, arguments, handler, started, log_result, sanitize, catch_errors
+        )
+
+
+def _call_in_scope(server_name, name, arguments, handler, started, log_result, sanitize, catch_errors):
     try:
         params = sanitize_arguments_for_tools(arguments) if sanitize else arguments
         result = handler(name, params)

@@ -16,11 +16,14 @@ kubectl_lineage_parents。
 
 import asyncio
 
+import anyio.to_thread
+import cluster_scope
 from holmes_tools import kubernetes_core
 from holmes_tools.mcp_logger import log_tool_call, log_tool_result
 from holmes_tools.server_adapter import call_text_tool_in_thread
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.types import TextContent
 
 _SERVER = "k8s-core-mcp"
 server = Server("k8s-core-mcp-server")
@@ -28,11 +31,17 @@ server = Server("k8s-core-mcp-server")
 
 @server.list_tools()
 async def list_tools():
-    return kubernetes_core.TOOLS
+    tools = cluster_scope.with_cluster_param(kubernetes_core.TOOLS)
+    if cluster_scope.multi():
+        tools = [*tools, cluster_scope.list_clusters_tool()]
+    return tools
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
+    if name == cluster_scope.LIST_CLUSTERS:
+        text = await anyio.to_thread.run_sync(cluster_scope.list_clusters_text)
+        return [TextContent(type="text", text=text)]
     return await call_text_tool_in_thread(
         _SERVER,
         name,

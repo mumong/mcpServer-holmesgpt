@@ -19,6 +19,7 @@ import subprocess
 from typing import Any, Dict, List
 
 import anyio.to_thread
+import cluster_scope
 from holmes_tools.arg_utils import sanitize_arguments_for_tools
 from holmes_tools.mcp_logger import log_tool_call
 from mcp.server import Server
@@ -395,7 +396,7 @@ TOOLS: List[Tool] = [
 @server.list_tools()
 async def list_tools():
     """定义可用的 Helm 工具"""
-    return TOOLS
+    return cluster_scope.with_cluster_param(TOOLS)
 
 
 @server.call_tool()
@@ -406,6 +407,19 @@ async def call_tool(name: str, arguments: dict):
 
 
 def _call_tool_sync(name: str, arguments: dict):
+    arguments = dict(arguments or {})
+    with cluster_scope.activate(arguments) as scope:
+        if scope.error:
+            return _text(cluster_scope.error_text(scope))
+        if cluster_scope.is_remote():
+            return _text(
+                f"aiops: capability_missing: helm is not available on remote cluster {scope.cluster.name} "
+                "(helm talks to the Kubernetes API directly and cannot go through the edge runner)"
+            )
+        return _call_tool_local(name, arguments)
+
+
+def _call_tool_local(name: str, arguments: dict):
     # MCP 入口层清洗：仅保留标量，避免误传对象导致命令注入/语法错误（与 Holmes 内置工具改造一致）
     arguments = sanitize_arguments_for_tools(arguments or {})
     handler = _HANDLERS.get(name)
