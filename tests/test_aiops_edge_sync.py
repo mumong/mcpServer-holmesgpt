@@ -21,6 +21,7 @@ class VendoredCopyTest(unittest.TestCase):
                     (SOURCE / name).read_text(),
                     "run scripts/sync_aiops_edge.sh",
                 )
+        self.assertEqual((ROOT / "bin" / "kubectl").read_text(), (SOURCE / "kubectl").read_text())
 
 
 class ShimWrapperTest(unittest.TestCase):

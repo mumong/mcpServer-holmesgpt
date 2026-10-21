@@ -9,4 +9,5 @@ mkdir -p "$dst"
 for f in __init__.py signing.py kubectl_args.py clusters.py tunnel.py shim.py streams.py; do
   cp "$src/$f" "$dst/$f"
 done
+cp "$src/kubectl" bin/kubectl && chmod +x bin/kubectl
 echo "synced $(ls $dst | wc -l) files from $src"
