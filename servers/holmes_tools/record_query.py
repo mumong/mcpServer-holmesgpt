@@ -70,8 +70,12 @@ def _compare(actual, op, expected):
     }[op]
 
 
-def select_records(rows, query, identity_fields=()):
-    """Filter the whole received page before projecting or counting; null is unknown."""
+def select_records(rows, query, identity_fields=(), group_facts=None):
+    """Filter the whole received page before projecting or counting; null is unknown.
+
+    ``group_facts(rows) -> dict`` (supplied by a record type) adds counted facts to
+    each group, computed from that group's own rows; this module stays rule-free.
+    """
     matched, unknown = [], 0
     for row in rows:
         decisions = [_compare(row.get(c["field"]), c["op"], c["value"]) for c in query["where"]]
@@ -87,7 +91,7 @@ def select_records(rows, query, identity_fields=()):
             matched.append(row)
     result = {"input_rows": len(rows), "matched_rows": len(matched), "unknown_filter_rows": unknown}
     if "group_by" in query:
-        groups = {}
+        groups, members = {}, {}
         field = query["group_by"]
         for row in matched:
             value = row.get(field)
@@ -95,6 +99,10 @@ def select_records(rows, query, identity_fields=()):
                 raise ValueError("group_by requires a scalar source field")
             key = encode(value)
             groups.setdefault(key, {field: value, "count": 0})["count"] += 1
+            members.setdefault(key, []).append(row)
+        if group_facts is not None:
+            for key, group in groups.items():
+                group.update(group_facts(members[key]))
         result.update(result_type="groups", groups=list(groups.values()))
     else:
         columns = list(dict.fromkeys([*identity_fields, *query["fields"]]))

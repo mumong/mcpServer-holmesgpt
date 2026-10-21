@@ -87,7 +87,8 @@ class RecordPagesTests(unittest.TestCase):
             "Ready": {"status": "False", "reason": "ProbeFailed"}
         }
         assert "conditions" not in result["columns"]
-        assert grouped["groups"] == [{"ready": False, "count": 1}]
+        assert [{k: g[k] for k in ("ready", "count")} for g in grouped["groups"]] == [{"ready": False, "count": 1}]
+        assert grouped["groups"][0]["not_ready"] == 1
 
     def test_group_pages_keep_counts_and_last_page_not_partial(self):
         packet = {

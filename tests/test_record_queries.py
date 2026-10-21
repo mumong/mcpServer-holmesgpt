@@ -73,7 +73,8 @@ class RecordQueryTests(unittest.TestCase):
     def test_exact_group_count_and_page_scope(self):
         result = self.call({"record_type": "pod", "group_by": "node"})
         self.assertEqual(result["contract_version"], "evidence-records.v1")
-        self.assertEqual(result["groups"], [{"node": "n", "count": 1}])
+        # Groups also carry counted health facts (run 97f67069325c471c); count is unchanged.
+        self.assertEqual(result["groups"], [{"node": "n", "count": 1, "not_ready": 0, "ready_unknown": 1}])
         self.assertEqual(result["coverage"], "partial")
         self.assertEqual(result["source_metadata"]["next_continue_token"], "next")
         self.assertEqual(result["source_metadata"]["remaining_item_count"], 7)

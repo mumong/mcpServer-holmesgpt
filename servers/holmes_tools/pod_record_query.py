@@ -339,6 +339,46 @@ def lifecycle_rows(payload, kind):
     return rows
 
 
+MAX_GROUP_EXAMPLES = 5
+
+
+def group_health(kind):
+    """Counted health facts per group: phase=Running includes NotReady and crash-looping
+    Pods, so a count alone hides them (run 97f67069325c471c reported 26 Running, none
+    abnormal, while two were in CrashLoopBackOff). Facts only; no diagnosis.
+    """
+
+    def facts(rows):
+        out = {"not_ready": sum(1 for r in rows if r.get("ready") is False)}
+        unknown = sum(1 for r in rows if r.get("ready") is None)
+        if unknown:
+            out["ready_unknown"] = unknown
+        terminating = sum(1 for r in rows if r.get("deletion_timestamp"))
+        if terminating:
+            out["terminating"] = terminating
+        examples = [f"{r.get('namespace')}/{r.get('pod')}" for r in rows if r.get("ready") is False]
+        if examples:
+            out["not_ready_examples"] = list(dict.fromkeys(examples))[:MAX_GROUP_EXAMPLES]
+        if kind == "container":
+            restarted = sum(1 for r in rows if (r.get("restart_count_in_window") or 0) > 0)
+            if restarted:
+                out["restarted_in_window"] = restarted
+            for key, values in (
+                ("waiting_reasons", [(r.get("current_state") or {}).get("reason") for r in rows
+                                     if (r.get("current_state") or {}).get("state") == "waiting"]),
+                ("last_termination_reasons", [r.get("last_termination_reason") for r in rows]),
+            ):
+                counts = {}
+                for value in values:
+                    if value:
+                        counts[value] = counts.get(value, 0) + 1
+                if counts:
+                    out[key] = counts
+        return out
+
+    return facts
+
+
 def _keep_deletion_facts(selected, rows, kind):
     """When a selected row's Pod is being deleted, add the deletion facts as columns.
 
@@ -379,6 +419,7 @@ def project(payload, prepared, arguments):
             rows,
             query,
             ["namespace", "pod", "uid"] + (["container", "role"] if kind == "container" else []),
+            group_facts=group_health(kind),
         )
         _keep_deletion_facts(selected, rows, kind)
         source = {k: payload[k] for k in SOURCE_KEYS if k in payload}
