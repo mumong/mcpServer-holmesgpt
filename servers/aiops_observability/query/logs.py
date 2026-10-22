@@ -874,16 +874,18 @@ def _execute_events(arguments: dict[str, Any]) -> dict[str, Any]:
             }
         )
     truncated = meta.get("matched", 0) > len(samples)
+    # AIOps contract: events are only part of the log signal, so found events are a
+    # query_partial (partial + source-backed facts); none found is an empty success.
     return {
         "ok": True,
-        "status": "query_succeeded",
+        "status": "query_partial" if facts else "query_succeeded",
         "source_system": "victorialogs",
         "dimension": "logging",
         "log_source": "k8s_events",
         "entity": entity,
         "purpose": purpose,
-        "coverage": "partial",
-        "directness": "direct" if samples else "none",
+        "coverage": "partial" if facts else "empty",
+        "directness": "direct",
         "query": meta,
         "facts": facts,
         "samples": samples,

@@ -179,6 +179,8 @@ class ObservabilityToolTest(Multi):
         self.assertTrue(out["ok"], out)
         self.assertEqual(out["log_source"], "k8s_events")
         self.assertEqual(out["coverage"], "partial")
+        self.assertEqual(out["status"], "query_partial")  # AIOps rejects succeeded+partial
+        self.assertEqual(out["directness"], "direct")
         self.assertEqual(out["backend"], "victorialogs_events")
         self.assertEqual([s["reason"] for s in out["samples"]], ["BackOff", "Scheduled"])  # web-1-x filtered
         self.assertEqual(out["samples"][0]["type"], "Warning")
@@ -187,6 +189,28 @@ class ObservabilityToolTest(Multi):
         query = fetch.call_args.args[1]
         self.assertIn(f'cluster:="{EDGE}"', query)
         self.assertIn('"involvedObject_name: web-1"', query)
+
+
+    def test_logs_without_events_are_an_empty_success(self):
+        from servers.aiops_observability.query import logs
+
+        entity = {"namespace": "shop", "pod": "web-9", "pod_uid": "u9", "containers": ["web"]}
+        with (
+            mock.patch.object(logs, "resolve_pod_scope", return_value=(entity, None)),
+            mock.patch(
+                "servers.aiops_observability.collectors.victorialogs_events._fetch",
+                return_value=(EVENT_LINES, None),
+            ),
+        ):
+            out = self.call(
+                "query_pod_logs",
+                {"cluster": "edge-88", "namespace": "shop", "pod": "web-9", "purpose": "p"},
+            )
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(
+            (out["status"], out["coverage"], out["directness"]),
+            ("query_succeeded", "empty", "direct"),
+        )
 
 
 class AdapterTest(Multi):
