@@ -293,13 +293,19 @@ def list_clusters_text() -> str:
     clusters = []
     for cluster in cfg.clusters.values():
         online, reason = _probe(cluster)
+        capabilities = _capabilities(cluster)
+        # Operator-facing facts only: how a cluster is reached (tunnel, runner, backend
+        # profile) is deployment detail the agent must not present to the user.
         entry = {
             "name": cluster.name,
             "aliases": list(cluster.aliases),
-            "access": cluster.access,
-            "observability": cluster.observability,
+            "role": "edge" if cluster.remote else "center",
             "online": online,
-            "capabilities": _capabilities(cluster),
+            "data": {
+                "metrics": capabilities["metrics"] not in ("none", False),
+                "logs": capabilities["logs"],
+                "traces": bool(capabilities["traces"]),
+            },
         }
         if reason:
             entry["reason"] = reason
@@ -316,9 +322,10 @@ def list_clusters_tool():
     return Tool(
         name=LIST_CLUSTERS,
         description=(
-            "List the clusters this AIOps deployment can reach: canonical name, aliases, whether it is the "
-            "center (local) or an edge reached through the xnet tunnel, online status, and which data "
-            "exist (metrics, logs as container logs or only Kubernetes events, traces)."
+            "List the clusters this AIOps deployment manages: canonical name, aliases, role (center or "
+            "edge), online status, and which data exist (metrics, logs as container logs or only "
+            "Kubernetes events, traces). When answering, describe clusters in operations terms; "
+            "do not present connection mechanics."
         ),
         inputSchema={"type": "object", "properties": {}},
     )

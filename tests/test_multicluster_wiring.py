@@ -283,9 +283,12 @@ class ListClustersTest(Multi):
             data = json.loads(cluster_scope.list_clusters_text())
         names = {c["name"]: c for c in data["clusters"]}
         self.assertEqual(names[EDGE]["aliases"], ["edge-88"])
-        self.assertEqual(names[EDGE]["access"], "xnet")
-        self.assertEqual(names[EDGE]["capabilities"]["traces"], False)
-        self.assertEqual(names[EDGE]["capabilities"]["logs"], "k8s_events")
+        self.assertEqual(names[EDGE]["role"], "edge")
+        self.assertEqual(names[data["center"]]["role"], "center")
+        self.assertEqual(names[EDGE]["data"]["traces"], False)
+        self.assertEqual(names[EDGE]["data"]["logs"], "k8s_events")
+        # connection mechanics stay out of what the agent can show the user
+        self.assertFalse({"access", "observability", "capabilities"} & set(names[EDGE]))
         self.assertTrue(names[EDGE]["online"])
         self.assertEqual(data["center"], "vc-xnet-management")
 

@@ -14,7 +14,9 @@ from holmes_tools import kubernetes_core
 class TabularColumnsTests(unittest.TestCase):
     def test_bare_paths_get_header_and_leading_dot(self):
         self.assertEqual(
-            kubernetes_core.normalize_custom_columns("metadata.name,status.addresses[0].address, spec.nodeName"),
+            kubernetes_core.normalize_custom_columns(
+                "metadata.name,status.addresses[0].address, spec.nodeName"
+            ),
             "NAME:.metadata.name,ADDRESS:.status.addresses[0].address,NODENAME:.spec.nodeName",
         )
 
@@ -24,7 +26,9 @@ class TabularColumnsTests(unittest.TestCase):
 
     def test_duplicate_derived_headers_are_disambiguated(self):
         self.assertEqual(
-            kubernetes_core.normalize_custom_columns("status.addresses[0].address,status.addresses[1].address"),
+            kubernetes_core.normalize_custom_columns(
+                "status.addresses[0].address,status.addresses[1].address"
+            ),
             "ADDRESS:.status.addresses[0].address,ADDRESS2:.status.addresses[1].address",
         )
 
@@ -36,6 +40,20 @@ class TabularColumnsTests(unittest.TestCase):
         args = run.call_args.args[1]
         self.assertEqual(args["kind"], "nodes")
         self.assertEqual(args["columns"], "NAME:.metadata.name,PHASE:.status.phase")
+
+    def test_single_quoted_jsonpath_literals_survive_the_shell(self):
+        # run 9095bbd6: kubectl failed with "unrecognized identifier Ready"
+        import shlex
+
+        from holmes_tools._command_runner import _render
+
+        spec = "NAME:.metadata.name,STATUS:.status.conditions[?(@.type=='Ready')].status"
+        columns = kubernetes_core.normalize_custom_columns(spec)
+        tpl = kubernetes_core._KUBERNETES_SPECS["kubernetes_tabular_query"][1]
+        argv = shlex.split(_render(tpl, {"kind": "nodes", "columns": columns}))
+        self.assertIn(
+            'custom-columns=NAME:.metadata.name,STATUS:.status.conditions[?(@.type=="Ready")].status', argv
+        )
 
     def test_description_states_the_column_format(self):
         tool = next(t for t in kubernetes_core.TOOLS if t.name == "kubernetes_tabular_query")

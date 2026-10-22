@@ -134,10 +134,15 @@ def normalize_custom_columns(spec: str) -> str:
     kubectl requires ``HEADER:.json.path`` per column. Models often pass bare
     paths (``metadata.name``); the header is derived from the last path word and
     the leading dot is added. Well-formed columns are left untouched.
+
+    The command template single-quotes the spec, so a JSONPath filter literal written
+    ``[?(@.type=='Ready')]`` (valid kubectl) closed the shell quote and kubectl failed
+    with ``unrecognized identifier Ready`` (run 9095bbd6). kubectl accepts double-quoted
+    literals too; they are safe inside the single quotes.
     """
     columns: List[str] = []
     headers: Dict[str, int] = {}
-    for raw in str(spec or "").split(","):
+    for raw in str(spec or "").replace("'", '"').split(","):
         column = raw.strip()
         if not column:
             continue
