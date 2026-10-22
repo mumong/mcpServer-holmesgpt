@@ -329,7 +329,7 @@ Enabled by mounting the cluster config (ConfigMap `aiops-clusters`, env `AIOPS_C
 - Remote kubectl goes through the `bin/kubectl` shim and the xnet tunnel to the edge `aiops-edge-runner`. helm is not available on remote clusters.
 - New tool `list_clusters` returns the cluster inventory and online state.
 - `servers/aiops_edge/` is a synced copy of robusta's `aiops_edge/`; do not edit it here (checked by `tests/test_aiops_edge_sync.py`).
-- Deploy with `make deploy-mc`.
+- Deploy: run `make mc-init` in the Agent repository first. It puts the cluster config, xnet certificate and signing key into the `mcp` namespace; no manual certificate handling. Then run `make deploy-mc` here. It stops with a hint if those objects are missing. Full steps: "Multi-cluster deployment" in the Agent README.
 
 The full design and implementation is documented in robusta's `docs/multi-cluster-design.md` (single source, Chinese).
 

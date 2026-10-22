@@ -351,7 +351,7 @@ config:
 - 远端集群的 kubectl 经 `bin/kubectl` 垫片和 xnet 隧道，发往边缘的 `aiops-edge-runner`；远端不支持 helm。
 - 新增工具 `list_clusters`，返回集群清单和在线状态。
 - `servers/aiops_edge/` 是 robusta 仓库 `aiops_edge/` 的同步副本，不要单独修改（`tests/test_aiops_edge_sync.py` 会检查）。
-- 部署：`make deploy-mc`。
+- 部署：先在 Agent 仓库执行 `make mc-init`（集群配置、xnet 证书、签名密钥放进 `mcp` 命名空间，不需要手动处理证书），再执行本仓库的 `make deploy-mc`；缺少这些对象时会提示。完整步骤见 Agent 仓库 README「多集群部署」。
 
 完整的设计与实现见 robusta 仓库的 `docs/multi-cluster-design.md`（单一来源）。
 

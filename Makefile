@@ -160,21 +160,25 @@ help:
 # robusta 的 `make sync-xnet-cert` 下发到 mcp 命名空间。
 # ============================================================
 MC_KUBE_DIR ?= $(HOME)/.kube/aiops-mc
-CENTER_KUBECONFIG ?= $(MC_KUBE_DIR)/center
-MC_CLUSTERS_FILE ?= ../robusta/deploy-edge/clusters.mc.yaml
+# 有 $(MC_KUBE_DIR)/center 就用它，否则用当前 kubectl 上下文（直接在中心节点上执行时）
+CENTER_KUBECONFIG ?= $(wildcard $(MC_KUBE_DIR)/center)
+CENTER_KUBECTL = kubectl $(if $(CENTER_KUBECONFIG),--kubeconfig $(CENTER_KUBECONFIG))
+# Agent 仓库目录（README 下载名 holmegpt-agent；开发机上是 robusta），只用于测试环境导入镜像
+AGENT_DIR ?= $(firstword $(wildcard ../holmegpt-agent ../robusta))
 MC_LOAD_HOSTS ?=
 .PHONY: deploy-mc sync-aiops-edge
 
 sync-aiops-edge:
 	./scripts/sync_aiops_edge.sh
 
+# 多集群中心部署。共享对象（集群配置、xnet 证书、签名密钥）由 Agent 仓库的 make mc-init 创建。
 deploy-mc:
-	@if test -n "$(MC_LOAD_HOSTS)"; then ../robusta/deploy-edge/load_image.sh $(DOCKER_NAME):$(DOCKER_TAG) $(MC_LOAD_HOSTS); fi
-	kubectl --kubeconfig $(CENTER_KUBECONFIG) create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl --kubeconfig $(CENTER_KUBECONFIG) apply -f -
-	kubectl --kubeconfig $(CENTER_KUBECONFIG) -n $(NAMESPACE) create configmap aiops-clusters \
-		--from-file=clusters.yaml=$(MC_CLUSTERS_FILE) --dry-run=client -o yaml | kubectl --kubeconfig $(CENTER_KUBECONFIG) apply -f -
+	@for obj in configmap/aiops-clusters secret/aiops-xnet-client-cert secret/aiops-edge-key; do \
+		$(CENTER_KUBECTL) -n $(NAMESPACE) get $$obj >/dev/null 2>&1 || { \
+			echo "缺少 $(NAMESPACE)/$$obj：先在 Agent 仓库执行 make mc-init" >&2; exit 1; }; done
+	@if test -n "$(MC_LOAD_HOSTS)"; then $(AGENT_DIR)/deploy-edge/load_image.sh $(DOCKER_NAME):$(DOCKER_TAG) $(MC_LOAD_HOSTS); fi
 	kubectl kustomize --load-restrictor=LoadRestrictionsNone deploy/envs/mc \
 		| sed 's|image: $(IMAGE_REPOSITORY)/$(PROJECT)/$(IMAGE_NAME):.*|image: $(DOCKER_NAME):$(DOCKER_TAG)|' \
-		| kubectl --kubeconfig $(CENTER_KUBECONFIG) apply -f -
-	kubectl --kubeconfig $(CENTER_KUBECONFIG) -n $(NAMESPACE) rollout restart deployment/mcp-server-manager
-	kubectl --kubeconfig $(CENTER_KUBECONFIG) -n $(NAMESPACE) rollout status deployment/mcp-server-manager --timeout=300s
+		| $(CENTER_KUBECTL) apply -f -
+	$(CENTER_KUBECTL) -n $(NAMESPACE) rollout restart deployment/mcp-server-manager
+	$(CENTER_KUBECTL) -n $(NAMESPACE) rollout status deployment/mcp-server-manager --timeout=300s
