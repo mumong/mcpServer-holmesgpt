@@ -342,6 +342,19 @@ config:
 
 ---
 
+## 多集群模式（`008-multi-cluster` 分支）
+
+挂载集群配置（ConfigMap `aiops-clusters`，环境变量 `AIOPS_CLUSTERS_CONFIG`）后开启；不挂载时行为与单集群完全相同。
+
+- 各工具 schema 增加 `cluster` 参数，入口由 `servers/cluster_scope.py` 激活集群上下文；缺少参数时返回 `cluster_required`。
+- 按集群选择可观测后端：VictoriaMetrics 查询附加 `extra_label`；VictoriaLogs 返回该 Pod 的 K8s 事件（`query_partial` / `empty`）；没有链路数据时返回 `capability_missing`。
+- 远端集群的 kubectl 经 `bin/kubectl` 垫片和 xnet 隧道，发往边缘的 `aiops-edge-runner`；远端不支持 helm。
+- 新增工具 `list_clusters`，返回集群清单和在线状态。
+- `servers/aiops_edge/` 是 robusta 仓库 `aiops_edge/` 的同步副本，不要单独修改（`tests/test_aiops_edge_sync.py` 会检查）。
+- 部署：`make deploy-mc`。
+
+完整的设计与实现见 robusta 仓库的 `docs/multi-cluster-design.md`（单一来源）。
+
 ## 外部依赖服务 URL 与 namespace
 
 某些 MCP 工具还会访问外部服务，这些地址在该 MCP 的 `env` 中配置。最容易混淆的是 Prometheus：

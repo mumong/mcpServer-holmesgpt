@@ -320,6 +320,19 @@ After changing the AIOps ConfigMap, reload or restart the AIOps agent so it relo
 
 ---
 
+## Multi-cluster mode (branch `008-multi-cluster`)
+
+Enabled by mounting the cluster config (ConfigMap `aiops-clusters`, env `AIOPS_CLUSTERS_CONFIG`). Without it, behaviour is exactly the single-cluster one.
+
+- Tool schemas gain a `cluster` argument, which `servers/cluster_scope.py` activates per call. A missing argument returns `cluster_required`.
+- The observability backend is chosen per cluster. VictoriaMetrics queries get `extra_label`. VictoriaLogs returns the Pod's K8s events (`query_partial` / `empty`). With no trace backend the result is `capability_missing`.
+- Remote kubectl goes through the `bin/kubectl` shim and the xnet tunnel to the edge `aiops-edge-runner`. helm is not available on remote clusters.
+- New tool `list_clusters` returns the cluster inventory and online state.
+- `servers/aiops_edge/` is a synced copy of robusta's `aiops_edge/`; do not edit it here (checked by `tests/test_aiops_edge_sync.py`).
+- Deploy with `make deploy-mc`.
+
+The full design and implementation is documented in robusta's `docs/multi-cluster-design.md` (single source, Chinese).
+
 ## External backend URLs and namespaces
 
 Some MCP tools call external services whose addresses are set in that MCP's `env`. Prometheus is the one most often confused:
