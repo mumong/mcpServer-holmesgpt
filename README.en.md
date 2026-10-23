@@ -156,6 +156,8 @@ make run-local
 
 ## Kubernetes deployment
 
+Copy-paste commands for deploying all three services (single cluster, multi-cluster, edge runners) are in the Agent README, "Deployment (copy and paste)". To deploy only this service: `make deploy` with existing images; after a code change bump `VERSION`, then `make build push deploy`; on a multi-cluster center use `make deploy-mc`.
+
 The default namespace is `mcp`, set consistently in:
 
 - `NAMESPACE := mcp` in the `Makefile`
@@ -320,7 +322,7 @@ After changing the AIOps ConfigMap, reload or restart the AIOps agent so it relo
 
 ---
 
-## Multi-cluster mode (branch `008-multi-cluster`)
+## Multi-cluster mode
 
 Enabled by mounting the cluster config (ConfigMap `aiops-clusters`, env `AIOPS_CLUSTERS_CONFIG`). Without it, behaviour is exactly the single-cluster one.
 
@@ -329,7 +331,7 @@ Enabled by mounting the cluster config (ConfigMap `aiops-clusters`, env `AIOPS_C
 - Remote kubectl goes through the `bin/kubectl` shim and the xnet tunnel to the edge `aiops-edge-runner`. helm is not available on remote clusters.
 - New tool `list_clusters` returns the cluster inventory and online state.
 - `servers/aiops_edge/` is a synced copy of robusta's `aiops_edge/`; do not edit it here (checked by `tests/test_aiops_edge_sync.py`).
-- Deploy: run `make mc-init` in the Agent repository first. It puts the cluster config, xnet certificate and signing key into the `mcp` namespace; no manual certificate handling. Then run `make deploy-mc` here. It stops with a hint if those objects are missing. Full steps: "Multi-cluster deployment" in the Agent README.
+- Deploy: run `make mc-init` in the Agent repository first. It puts the cluster config, xnet certificate and signing key into the `mcp` namespace; no manual certificate handling. Then run `make deploy-mc` here. It stops with a hint if those objects are missing. Full steps: "Deployment (copy and paste)" in the Agent README.
 
 The full design and implementation is documented in robusta's `docs/multi-cluster-design.md` (single source, Chinese).
 

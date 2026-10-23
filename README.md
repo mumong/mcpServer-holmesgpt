@@ -173,6 +173,8 @@ make run-local
 
 ## K8s 部署
 
+三个服务一起部署（单集群、多集群、边缘 runner）的复制命令见 Agent 仓库 README「部署（复制即用）」。单独部署本服务：已有镜像执行 `make deploy`，改了代码先把 `VERSION` 加一，再执行 `make build push deploy`；多集群中心用 `make deploy-mc`。
+
 默认部署 namespace 是 `mcp`，由以下文件共同决定：
 
 - `Makefile` 中的 `NAMESPACE := mcp`
@@ -342,7 +344,7 @@ config:
 
 ---
 
-## 多集群模式（`008-multi-cluster` 分支）
+## 多集群模式
 
 挂载集群配置（ConfigMap `aiops-clusters`，环境变量 `AIOPS_CLUSTERS_CONFIG`）后开启；不挂载时行为与单集群完全相同。
 
@@ -351,7 +353,7 @@ config:
 - 远端集群的 kubectl 经 `bin/kubectl` 垫片和 xnet 隧道，发往边缘的 `aiops-edge-runner`；远端不支持 helm。
 - 新增工具 `list_clusters`，返回集群清单和在线状态。
 - `servers/aiops_edge/` 是 robusta 仓库 `aiops_edge/` 的同步副本，不要单独修改（`tests/test_aiops_edge_sync.py` 会检查）。
-- 部署：先在 Agent 仓库执行 `make mc-init`（集群配置、xnet 证书、签名密钥放进 `mcp` 命名空间，不需要手动处理证书），再执行本仓库的 `make deploy-mc`；缺少这些对象时会提示。完整步骤见 Agent 仓库 README「多集群部署」。
+- 部署：先在 Agent 仓库执行 `make mc-init`（集群配置、xnet 证书、签名密钥放进 `mcp` 命名空间，不需要手动处理证书），再执行本仓库的 `make deploy-mc`；缺少这些对象时会提示。完整步骤见 Agent 仓库 README「部署（复制即用）」。
 
 完整的设计与实现见 robusta 仓库的 `docs/multi-cluster-design.md`（单一来源）。
 
