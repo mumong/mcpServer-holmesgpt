@@ -38,11 +38,17 @@ deploy:
 	@sed -i 's|image: $(IMAGE_REPOSITORY)/$(PROJECT)/$(IMAGE_NAME):.*|image: $(DOCKER_NAME):$(DOCKER_TAG)|' deploy/deployment.yaml
 	# 2. 创建 namespace（如果不存在）
 	@kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
-	# 3. 应用所有配置（会自动触发滚动更新）
+	# 3. 应用所有配置，再滚动重启：只改 ConfigMap 时 apply 不会重启 Pod，服务启动时才读配置
 	kubectl apply -f deploy/
-	# 4. 等待滚动更新完成
+	kubectl rollout restart deployment/mcp-server-manager -n $(NAMESPACE)
+	# 4. 等待滚动更新完成；失败则回滚到上一个版本
 	@echo "⏳ Waiting for rollout to complete..."
-	kubectl rollout status deployment/mcp-server-manager -n $(NAMESPACE) --timeout=120s
+	@kubectl rollout status deployment/mcp-server-manager -n $(NAMESPACE) --timeout=180s || { \
+		echo "Rollout failed; rolling back to the previous ReplicaSet..."; \
+		kubectl -n $(NAMESPACE) logs deployment/mcp-server-manager --tail=40 2>/dev/null | tail -40; \
+		kubectl rollout undo deployment/mcp-server-manager -n $(NAMESPACE); \
+		kubectl rollout status deployment/mcp-server-manager -n $(NAMESPACE) --timeout=180s; \
+		exit 1; }
 	@echo "✅ Deploy completed!"
 
 delete:
