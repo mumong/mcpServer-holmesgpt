@@ -30,40 +30,22 @@ AIOps/HolmesGPT mcp_servers.url
 mcpstander/
 ├── start.py                      # 统一启动器：读取配置，为每个 MCP 启动 mcp-proxy 子进程
 ├── launch_config.py              # 纯函数：子进程环境与 proxy 命令构造
-├── mcp_client.py                  # SSE 测试客户端
-├── config/
-│   ├── mcp_config.yaml            # 本地默认配置
-│   └── mcp_config.example.yaml    # 本地覆盖示例，可复制为 mcp_config.local.yaml
-├── servers/                       # 本地 Python MCP Server（stdio 协议）
-│   ├── test_server.py
-│   ├── helm_server.py
-│   ├── k8s_core_server.py
-│   ├── bash_server.py
-│   ├── prometheus_server.py
-│   ├── internet_server.py
-│   ├── connectivity_server.py
-│   ├── core_investigation_server.py
-│   ├── runbook_server.py
-│   ├── aiops_case_server.py
-│   ├── aiops_observability_fine_server.py
-│   ├── aiops_observability_query_server.py
-│   ├── holmes_tools/              # 工具合同、分派和共享文本入口适配器
-│   └── aiops_observability/       # 采集器、case 存储、Pod query 与 Fact Ledger
-├── deploy/
-│   ├── namespace.yaml
-│   ├── configmap.yaml             # K8s 部署时使用的 mcp_config.yaml
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   └── rbac.yaml
-├── scripts/run-local.sh
-├── docs/EXTENDING.md              # 添加新 MCP 的详细指南
-├── docs/AIOPS_OBSERVABILITY_QUERY.md # Pod 查询与 canonical Fact Ledger 合同
-├── Dockerfile
-├── Makefile
-├── requirements.txt              # 镜像运行依赖
-├── requirements-test.txt         # 离线测试依赖
+├── mcp_client.py                 # SSE 测试客户端
+├── config/                       # 本地运行配置（mcp_config.yaml / .example.yaml）
+├── servers/                      # 本地 Python MCP Server（stdio 协议）
+│   ├── *_server.py               # 每个 MCP 一个入口（k8s_core、prometheus、bash、helm、aiops_observability_query 等）
+│   ├── cluster_scope.py          # 多集群：每次工具调用的目标集群（cluster 参数）
+│   ├── aiops_edge/               # 多集群：kubectl 替身与 xnet 隧道客户端（Agent 仓库 aiops_edge/ 的同步副本）
+│   ├── holmes_tools/             # 工具合同、分派和共享文本入口适配器
+│   └── aiops_observability/      # 采集器、case 存储、Pod query 与 Fact Ledger
+├── bin/kubectl                   # 镜像里的 kubectl 替身：本集群直接执行，边缘集群转发给 runner
+├── deploy/                       # 单集群清单（configmap / deployment / service / rbac / namespace）
+│   └── envs/mc/                  # 多集群中心的 kustomize 覆盖（make deploy-mc）
+├── scripts/                      # 本地运行、离线测试、语法检查、aiops_edge 同步脚本
+├── docs/                         # 扩展新 MCP、Pod 查询与 Fact Ledger 合同
 ├── tests/                        # unittest 单元与合同回归测试
-└── CONTRIBUTING.md               # 兼容性约束、开发与验证约定
+├── Dockerfile、Makefile、VERSION
+└── requirements.txt / requirements-test.txt
 ```
 
 ---
@@ -173,37 +155,18 @@ make run-local
 
 ## K8s 部署
 
-三个服务一起部署（单集群、多集群、边缘 runner）的复制命令见 Agent 仓库 README「部署（复制即用）」。单独部署本服务：已有镜像执行 `make deploy`，改了代码先把 `VERSION` 加一，再执行 `make build push deploy`；多集群中心用 `make deploy-mc`。
-
-默认部署 namespace 是 `mcp`，由以下文件共同决定：
-
-- `Makefile` 中的 `NAMESPACE := mcp`
-- `deploy/namespace.yaml`
-- `deploy/configmap.yaml` 的 `metadata.namespace`
-- `deploy/deployment.yaml` 的 `metadata.namespace`
-- `deploy/service.yaml` 的 `metadata.namespace`
-- `deploy/rbac.yaml` 中 ServiceAccount 和 ClusterRoleBinding subject 的 namespace
-
-部署命令：
+三个服务一起部署（单集群、多集群、边缘 runner）的复制命令见 Agent 仓库 README「部署（复制即用）」。单独部署本服务：
 
 ```bash
-make build-push
-make deploy
-make status
+make deploy                       # 已有镜像：apply + 滚动重启 + 等待就绪，失败自动回滚到上一版本
+echo <新版本号> > VERSION && make build push deploy   # 改了代码
+make deploy-mc                    # 多集群中心（先在 Agent 仓库执行 make mc-init）
+make status                       # 查看 Pod / Service / ConfigMap
 ```
 
-只修改 ConfigMap 配置时：
+`make deploy` 每次都会滚动重启，所以只改 `deploy/configmap.yaml` 时执行它也会生效（`make reload` 效果相同）。改了 `start.py`、`launch_config.py`、`servers/` 或 `Dockerfile` 时，要先把 `VERSION` 加一并重新构建镜像。
 
-```bash
-make reload
-```
-
-修改 `start.py`、`launch_config.py`、`servers/` 或 `Dockerfile` 后，需要重新构建镜像：
-
-```bash
-make build-push
-make deploy
-```
+默认部署 namespace 是 `mcp`，由 `Makefile` 的 `NAMESPACE := mcp` 和 `deploy/*.yaml` 中的 namespace 共同决定（含 `rbac.yaml` 中 ClusterRoleBinding 的 subject），修改时要一起改。
 
 ### aiops-case 数据目录挂载
 
@@ -288,7 +251,7 @@ customermcp:
 3. `deploy/service.yaml` 中 `spec.ports[].port` 和 `targetPort`
 4. AIOps/HolmesGPT 配置里的 `mcp_servers.<name>.config.url`
 
-只改 `env`、`enabled` 或第三方服务地址时，一般只需要改 ConfigMap 后执行 `make reload`。
+只改 `env`、`enabled` 或第三方服务地址时，改 ConfigMap 后执行 `make deploy` 或 `make reload` 即可。
 
 ---
 
@@ -346,16 +309,20 @@ config:
 
 ## 多集群模式
 
-挂载集群配置（ConfigMap `aiops-clusters`，环境变量 `AIOPS_CLUSTERS_CONFIG`）后开启；不挂载时行为与单集群完全相同。
+挂载集群配置（ConfigMap `aiops-clusters`，环境变量 `AIOPS_CLUSTERS_CONFIG`）后开启；不挂载时就是单集群，工具定义和行为与原来相同。
 
-- 各工具 schema 增加 `cluster` 参数，入口由 `servers/cluster_scope.py` 激活集群上下文；缺少参数时返回 `cluster_required`。
-- 按集群选择可观测后端：VictoriaMetrics 查询附加 `extra_label`；VictoriaLogs 返回该 Pod 的 K8s 事件（`query_partial` / `empty`）；没有链路数据时返回 `capability_missing`。
-- 远端集群的 kubectl 经 `bin/kubectl` 垫片和 xnet 隧道，发往边缘的 `aiops-edge-runner`；远端不支持 helm。
-- 新增工具 `list_clusters`，返回集群清单和在线状态。
-- `servers/aiops_edge/` 是 robusta 仓库 `aiops_edge/` 的同步副本，不要单独修改（`tests/test_aiops_edge_sync.py` 会检查）。
-- 部署：先在 Agent 仓库执行 `make mc-init`（集群配置、xnet 证书、签名密钥放进 `mcp` 命名空间，不需要手动处理证书），再执行本仓库的 `make deploy-mc`；缺少这些对象时会提示。完整步骤见 Agent 仓库 README「部署（复制即用）」。
+每个工具多一个 `cluster` 参数（`servers/cluster_scope.py`），缺少时返回 `cluster_required`；新增 `list_clusters` 返回集群清单和在线状态。不同工具在不同地方执行：
 
-完整的设计与实现见 robusta 仓库的 `docs/multi-cluster-design.md`（单一来源）。
+| 工具 | 执行位置 | 说明 |
+|---|---|---|
+| 指标、日志、链路（Prometheus、`aiops-observability-query`） | 中心 | 查询中心的 VictoriaMetrics / VictoriaLogs，按 `cluster` 标签过滤；没有链路数据时返回 `capability_missing` |
+| kubectl 类（`k8s-core`、Pod 生命周期等） | 边缘 | 子进程环境带上目标集群，`bin/kubectl` 替身经 xnet 隧道把命令交给边缘的 `aiops-edge-runner` 执行，按 runner 权限等级放行 |
+| `bash_command` | 边缘集群只接受 `kubectl … \| jq/grep` 这类管道 | kubectl 部分在边缘执行，过滤在中心执行；其他命令会被拒绝 |
+| `helm-tools` | 只在本集群 | 远端集群返回 `capability_missing` |
+
+- 部署：先在 Agent 仓库执行 `make mc-init`（集群配置、xnet 证书、签名密钥放进 `mcp` 命名空间，不需要手动处理证书），再执行本仓库的 `make deploy-mc`；缺少这些对象时会提示。
+- `servers/aiops_edge/` 是 Agent 仓库 `aiops_edge/` 的同步副本，不要单独修改：在这里执行 `make sync-aiops-edge` 同步（默认从 `../robusta/aiops_edge` 复制；按 README 克隆的目录名是 `holmegpt-agent`，这时执行 `./scripts/sync_aiops_edge.sh ../holmegpt-agent/aiops_edge`），`tests/test_aiops_edge_sync.py` 会检查两边是否一致。
+- 完整的设计与实现见 Agent 仓库的 `docs/multi-cluster-design.md`（单一来源）。
 
 ## 外部依赖服务 URL 与 namespace
 
@@ -396,7 +363,7 @@ env:
 
 | 变化场景 | 需要修改 |
 |---|---|
-| 只有 Prometheus 从 `xnet` 移到 `monitor` | 只改 `deploy/configmap.yaml` 中 `PROMETHEUS_URL` 为 `http://observability-prometheus.monitor.svc:9090`，然后 `make reload` |
+| 只有 Prometheus 从 `xnet` 移到 `monitor` | 只改 `deploy/configmap.yaml` 中 `PROMETHEUS_URL` 为 `http://observability-prometheus.monitor.svc:9090`，然后 `make deploy` |
 | 只有 MCP Server Manager 从 `mcp` 移到 `monitor` | 改 `deploy/*.yaml` 和 `Makefile` 中本项目 namespace；AIOps `mcp_servers.*.config.url` 改为 `http://mcp-server-manager.monitor:<port>/sse` |
 | Prometheus 和 MCP Server Manager 都移到 `monitor` | 两边都改：`PROMETHEUS_URL` 使用 `observability-prometheus.monitor.svc`，AIOps SSE URL 使用 `mcp-server-manager.monitor` |
 
@@ -454,19 +421,16 @@ kubectl exec -n mcp deployment/mcp-server-manager -- \
 
 | 命令 | 说明 |
 |---|---|
-| `make build` | 构建镜像 |
-| `make push` | 推送镜像 |
-| `make build-push` | 构建并推送 |
-| `make deploy` | 部署到 K8s |
+| `make build` / `make push` / `make build-push` | 构建、推送镜像 |
+| `make deploy` | 部署到 K8s：apply、滚动重启、等待就绪，失败自动回滚 |
+| `make deploy-mc` | 部署到多集群中心（需先在 Agent 仓库 `make mc-init`） |
+| `make reload` / `make restart` | 应用 ConfigMap 并重启 / 仅重启 |
 | `make delete` | 删除部署资源，保留 namespace |
-| `make reload` | 应用 ConfigMap 并重启 Deployment |
-| `make restart` | 重启 Deployment |
-| `make status` | 查看 Pod / Service / ConfigMap |
-| `make logs` | 查看日志 |
-| `make run` | 本地运行 `config/mcp_config.yaml` |
-| `make run-local` | 本地运行，优先读取 `config/mcp_config.local.yaml` |
-| `make list` | 列出配置中的 MCP 服务 |
-| `make test` | 运行 `mcp_client.py` 测试 |
+| `make status` / `make logs` | 查看资源 / 日志 |
+| `make run` / `make run-local` / `make list` | 本地运行默认配置 / 优先读 `config/mcp_config.local.yaml` / 列出配置的 MCP |
+| `make check` / `make test-unit` / `make lint` / `make format` | 语法 + 离线测试 / 仅离线测试 / ruff 检查 / 格式化 |
+| `make test` | 用 `mcp_client.py` 测试运行中的 SSE 服务 |
+| `make sync-aiops-edge` | 从 Agent 仓库同步 `servers/aiops_edge/` |
 
 ---
 
@@ -478,7 +442,7 @@ kubectl exec -n mcp deployment/mcp-server-manager -- \
 | K8s 内连不上 `/sse` | ConfigMap 端口、Deployment containerPort、Service port 不一致 | 按“K8s 端口同步规则”检查四处配置 |
 | Prometheus 查询失败 | `PROMETHEUS_URL` 指向了错误 namespace/service/port，或 NetworkPolicy/RBAC 限制 | 在 Pod 内 curl Prometheus ready 接口，确认 `http://<service>.<namespace>.svc:<port>` 可达 |
 | 本地启动失败 | Python/Node 依赖缺失，端口占用，server `path` 写错 | 安装 `requirements.txt`，检查 `node`/`mcp-proxy`，运行 `python3 start.py --list` |
-| 只改配置后未生效 | ConfigMap 已改但 Pod 没重启 | 执行 `make reload` |
+| 只改配置后未生效 | ConfigMap 已改但 Pod 没重启 | 执行 `make deploy`（会滚动重启）或 `make reload` |
 
 更多添加新 MCP 的步骤见 [docs/EXTENDING.md](docs/EXTENDING.md)。
 

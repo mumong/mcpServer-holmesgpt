@@ -28,42 +28,24 @@ The two can live in different namespaces; when you change a namespace, change th
 
 ```text
 mcpstander/
-├── start.py                      # launcher: reads the config, starts one mcp-proxy child process per MCP
-├── launch_config.py              # pure functions: child-process environment and proxy command
-├── mcp_client.py                  # SSE test client
-├── config/
-│   ├── mcp_config.yaml            # local default configuration
-│   └── mcp_config.example.yaml    # local override example; copy to mcp_config.local.yaml
-├── servers/                       # local Python MCP servers (stdio protocol)
-│   ├── test_server.py
-│   ├── helm_server.py
-│   ├── k8s_core_server.py
-│   ├── bash_server.py
-│   ├── prometheus_server.py
-│   ├── internet_server.py
-│   ├── connectivity_server.py
-│   ├── core_investigation_server.py
-│   ├── runbook_server.py
-│   ├── aiops_case_server.py
-│   ├── aiops_observability_fine_server.py
-│   ├── aiops_observability_query_server.py
-│   ├── holmes_tools/              # tool contracts, dispatch and the shared text-entry adapter
-│   └── aiops_observability/       # collectors, case storage, Pod query and Fact Ledger
-├── deploy/
-│   ├── namespace.yaml
-│   ├── configmap.yaml             # mcp_config.yaml used in Kubernetes
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   └── rbac.yaml
-├── scripts/run-local.sh
-├── docs/EXTENDING.md              # detailed guide to adding a new MCP
-├── docs/AIOPS_OBSERVABILITY_QUERY.md # Pod query and canonical Fact Ledger contract
-├── Dockerfile
-├── Makefile
-├── requirements.txt              # image runtime dependencies
-├── requirements-test.txt         # offline test dependencies
+├── start.py                      # launcher: reads the config, starts one mcp-proxy child per MCP
+├── launch_config.py              # pure functions: child environment and proxy command
+├── mcp_client.py                 # SSE test client
+├── config/                       # local run configuration (mcp_config.yaml / .example.yaml)
+├── servers/                      # local Python MCP servers (stdio)
+│   ├── *_server.py               # one entry per MCP (k8s_core, prometheus, bash, helm, aiops_observability_query, ...)
+│   ├── cluster_scope.py          # multi-cluster: target cluster of each tool call (cluster argument)
+│   ├── aiops_edge/               # multi-cluster: kubectl shim and xnet tunnel client (synced copy of the Agent repo's aiops_edge/)
+│   ├── holmes_tools/             # tool contracts, dispatch and the shared text-entry adapter
+│   └── aiops_observability/      # collectors, case store, Pod query and the Fact Ledger
+├── bin/kubectl                   # kubectl shim in the image: runs locally, or forwards to an edge runner
+├── deploy/                       # single-cluster manifests (configmap / deployment / service / rbac / namespace)
+│   └── envs/mc/                  # kustomize overlay for the multi-cluster center (make deploy-mc)
+├── scripts/                      # local run, offline tests, syntax check, aiops_edge sync
+├── docs/                         # extending with new MCPs, Pod query and Fact Ledger contract
 ├── tests/                        # unittest unit and contract regression tests
-└── CONTRIBUTING.md               # compatibility constraints, development and verification rules
+├── Dockerfile, Makefile, VERSION
+└── requirements.txt / requirements-test.txt
 ```
 
 ---
@@ -156,37 +138,18 @@ make run-local
 
 ## Kubernetes deployment
 
-Copy-paste commands for deploying all three services (single cluster, multi-cluster, edge runners) are in the Agent README, "Deployment (copy and paste)". To deploy only this service: `make deploy` with existing images; after a code change bump `VERSION`, then `make build push deploy`; on a multi-cluster center use `make deploy-mc`.
-
-The default namespace is `mcp`, set consistently in:
-
-- `NAMESPACE := mcp` in the `Makefile`
-- `deploy/namespace.yaml`
-- `metadata.namespace` in `deploy/configmap.yaml`
-- `metadata.namespace` in `deploy/deployment.yaml`
-- `metadata.namespace` in `deploy/service.yaml`
-- the ServiceAccount and ClusterRoleBinding subject namespace in `deploy/rbac.yaml`
-
-Deploy:
+Copy-paste commands for all three services (single cluster, multi-cluster, edge runners) are in the Agent README, "Deployment (copy and paste)". To deploy only this service:
 
 ```bash
-make build-push
-make deploy
-make status
+make deploy                       # existing image: apply + rolling restart + wait; a failed rollout is rolled back
+echo <new version> > VERSION && make build push deploy   # after a code change
+make deploy-mc                    # multi-cluster center (run make mc-init in the Agent repo first)
+make status                       # Pods / Service / ConfigMap
 ```
 
-When only the ConfigMap changes:
+`make deploy` always restarts (rolling), so a change to `deploy/configmap.yaml` alone takes effect with it (`make reload` does the same). After changing `start.py`, `launch_config.py`, `servers/` or the `Dockerfile`, bump `VERSION` and rebuild the image.
 
-```bash
-make reload
-```
-
-After changing `start.py`, `launch_config.py`, `servers/` or the `Dockerfile`, rebuild the image:
-
-```bash
-make build-push
-make deploy
-```
+The default namespace is `mcp`, set by `NAMESPACE := mcp` in the `Makefile` and by the namespaces in `deploy/*.yaml` (including the ClusterRoleBinding subject in `rbac.yaml`); change them together.
 
 ### aiops-case data directory
 
@@ -266,7 +229,7 @@ When you add an MCP or change a port, update all four places:
 3. `spec.ports[].port` and `targetPort` in `deploy/service.yaml`
 4. `mcp_servers.<name>.config.url` in the AIOps/HolmesGPT configuration
 
-When only `env`, `enabled` or a third-party backend address changes, updating the ConfigMap and running `make reload` is usually enough.
+When only `env`, `enabled` or a third-party backend address changes, updating the ConfigMap and running `make deploy` or `make reload` is enough.
 
 ---
 
@@ -324,16 +287,20 @@ After changing the AIOps ConfigMap, reload or restart the AIOps agent so it relo
 
 ## Multi-cluster mode
 
-Enabled by mounting the cluster config (ConfigMap `aiops-clusters`, env `AIOPS_CLUSTERS_CONFIG`). Without it, behaviour is exactly the single-cluster one.
+Enabled by mounting the cluster configuration (ConfigMap `aiops-clusters`, env `AIOPS_CLUSTERS_CONFIG`); without it this is a single cluster and the tools behave as before.
 
-- Tool schemas gain a `cluster` argument, which `servers/cluster_scope.py` activates per call. A missing argument returns `cluster_required`.
-- The observability backend is chosen per cluster. VictoriaMetrics queries get `extra_label`. VictoriaLogs returns the Pod's K8s events (`query_partial` / `empty`). With no trace backend the result is `capability_missing`.
-- Remote kubectl goes through the `bin/kubectl` shim and the xnet tunnel to the edge `aiops-edge-runner`. helm is not available on remote clusters.
-- New tool `list_clusters` returns the cluster inventory and online state.
-- `servers/aiops_edge/` is a synced copy of robusta's `aiops_edge/`; do not edit it here (checked by `tests/test_aiops_edge_sync.py`).
-- Deploy: run `make mc-init` in the Agent repository first. It puts the cluster config, xnet certificate and signing key into the `mcp` namespace; no manual certificate handling. Then run `make deploy-mc` here. It stops with a hint if those objects are missing. Full steps: "Deployment (copy and paste)" in the Agent README.
+Every tool gets a `cluster` argument (`servers/cluster_scope.py`); a missing one returns `cluster_required`. `list_clusters` returns the clusters and whether they are online. Tools run in different places:
 
-The full design and implementation is documented in robusta's `docs/multi-cluster-design.md` (single source, Chinese).
+| Tools | Run where | Notes |
+|---|---|---|
+| Metrics, logs, traces (Prometheus, `aiops-observability-query`) | center | query the center's VictoriaMetrics / VictoriaLogs filtered by the `cluster` label; no trace data returns `capability_missing` |
+| kubectl tools (`k8s-core`, Pod lifecycle, ...) | edge | the child process carries the target cluster; the `bin/kubectl` shim sends the command through the xnet tunnel to the edge's `aiops-edge-runner`, allowed by the runner's permission level |
+| `bash_command` | edge clusters accept only `kubectl ... \| jq/grep` pipelines | kubectl runs on the edge, filters on the center; anything else is refused |
+| `helm-tools` | local cluster only | remote clusters return `capability_missing` |
+
+- Deploy: run `make mc-init` in the Agent repo first (cluster config, xnet certificate and signing key into the `mcp` namespace; no manual certificate handling), then `make deploy-mc` here; it stops with a hint if those objects are missing.
+- `servers/aiops_edge/` is a synced copy of the Agent repo's `aiops_edge/`; do not edit it here. Sync with `make sync-aiops-edge` (copies from `../robusta/aiops_edge` by default; with the README's clone name use `./scripts/sync_aiops_edge.sh ../holmegpt-agent/aiops_edge`); `tests/test_aiops_edge_sync.py` checks both sides match.
+- Full design and implementation: `docs/multi-cluster-design.md` in the Agent repo (single source).
 
 ## External backend URLs and namespaces
 
@@ -374,7 +341,7 @@ env:
 
 | Change | What to update |
 |---|---|
-| Only Prometheus moves from `xnet` to `monitor` | Only `PROMETHEUS_URL` in `deploy/configmap.yaml`, to `http://observability-prometheus.monitor.svc:9090`, then `make reload` |
+| Only Prometheus moves from `xnet` to `monitor` | Only `PROMETHEUS_URL` in `deploy/configmap.yaml`, to `http://observability-prometheus.monitor.svc:9090`, then `make deploy` |
 | Only MCP Server Manager moves from `mcp` to `monitor` | This project's namespace in `deploy/*.yaml` and the `Makefile`; AIOps `mcp_servers.*.config.url` becomes `http://mcp-server-manager.monitor:<port>/sse` |
 | Both move to `monitor` | Both sides: `PROMETHEUS_URL` uses `observability-prometheus.monitor.svc`, and the AIOps SSE URL uses `mcp-server-manager.monitor` |
 
@@ -432,19 +399,16 @@ kubectl exec -n mcp deployment/mcp-server-manager -- \
 
 | Target | Description |
 |---|---|
-| `make build` | Build the image |
-| `make push` | Push the image |
-| `make build-push` | Build and push |
-| `make deploy` | Deploy to Kubernetes |
-| `make delete` | Delete the deployed resources, keep the namespace |
-| `make reload` | Apply the ConfigMap and restart the Deployment |
-| `make restart` | Restart the Deployment |
-| `make status` | Show Pod / Service / ConfigMap |
-| `make logs` | Show logs |
-| `make run` | Run locally with `config/mcp_config.yaml` |
-| `make run-local` | Run locally, preferring `config/mcp_config.local.yaml` |
-| `make list` | List the MCP services in the configuration |
-| `make test` | Run the `mcp_client.py` check |
+| `make build` / `make push` / `make build-push` | build, push the image |
+| `make deploy` | deploy to Kubernetes: apply, rolling restart, wait; a failed rollout is rolled back |
+| `make deploy-mc` | deploy to the multi-cluster center (run `make mc-init` in the Agent repo first) |
+| `make reload` / `make restart` | apply the ConfigMap and restart / restart only |
+| `make delete` | delete the resources, keep the namespace |
+| `make status` / `make logs` | resources / logs |
+| `make run` / `make run-local` / `make list` | run the default config / prefer `config/mcp_config.local.yaml` / list configured MCPs |
+| `make check` / `make test-unit` / `make lint` / `make format` | syntax + offline tests / offline tests only / ruff check / format |
+| `make test` | test a running SSE service with `mcp_client.py` |
+| `make sync-aiops-edge` | sync `servers/aiops_edge/` from the Agent repo |
 
 ---
 
@@ -456,7 +420,7 @@ kubectl exec -n mcp deployment/mcp-server-manager -- \
 | `/sse` unreachable inside the cluster | ConfigMap port, Deployment containerPort and Service port disagree | Check the four places in "Keeping Kubernetes ports in sync" |
 | Prometheus queries fail | `PROMETHEUS_URL` points to the wrong namespace/service/port, or NetworkPolicy/RBAC blocks it | curl the Prometheus ready endpoint from the Pod and confirm `http://<service>.<namespace>.svc:<port>` is reachable |
 | Local start fails | Missing Python/Node dependencies, port in use, wrong server `path` | Install `requirements.txt`, check `node`/`mcp-proxy`, run `python3 start.py --list` |
-| A config change has no effect | The ConfigMap changed but the Pod was not restarted | Run `make reload` |
+| A config change has no effect | The ConfigMap changed but the Pod was not restarted | Run `make deploy` (it restarts) or `make reload` |
 
 Steps for adding a new MCP are in [docs/EXTENDING.md](docs/EXTENDING.md) (Chinese).
 
