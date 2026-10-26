@@ -39,6 +39,7 @@ K8s AIOps Copilot 的工具服务：把多个 stdio MCP Server 统一拉起，�
 make deploy        # 单集群：apply + 滚动重启 + 等待就绪，失败自动回滚
 make deploy-mc     # 多集群中心（先在 Agent 仓库执行 make mc-init）
 make status        # 查看 Pod / Service / ConfigMap
+make delete        # 卸载（保留命名空间）
 ```
 
 ### 修改配置或升级

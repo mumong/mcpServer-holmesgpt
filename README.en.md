@@ -39,6 +39,7 @@ The tool service of K8s AIOps Copilot: it starts several stdio MCP servers and e
 make deploy        # single cluster: apply + rolling restart + wait; a failed rollout is rolled back
 make deploy-mc     # multi-cluster center (run make mc-init in the Agent repository first)
 make status        # Pods / Service / ConfigMap
+make delete        # uninstall (keeps the namespace)
 ```
 
 ### Change configuration or upgrade
